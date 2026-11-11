@@ -1,6 +1,6 @@
 # Developer recipes for the host machine. Cross-compiling and deploying to
 # another device live in cross.mk (run with `make -f cross.mk <target>`).
-# Personal settings (e.g. BENCH_DIR) can go in an untracked local.mk.
+# Personal settings go in an untracked local.mk; see local.mk.example.
 -include local.mk
 
 BIN := bin

@@ -1,0 +1,32 @@
+# Personal development settings. Copy to local.mk (untracked) and edit:
+#
+#   cp local.mk.example local.mk
+#
+# Read by both Makefile and cross.mk. Every value can also be overridden for
+# one run on the command line, e.g. `make -f cross.mk e2e DEPLOY_HOST=...`.
+
+# Machines for the remote targets (make -f cross.mk deploy|smoke|fixture|e2e|
+# test-remote|bench). Used throughout development. Comma-separated entries of
+#
+#   user@host:/runtime/dir:/scan/dir
+#
+#   runtime dir  absolute; holds the uvsh binary, helper scripts and, briefly,
+#                compiled tests. Must allow executing programs (not noexec).
+#   scan dir     absolute; where the e2e fixture tree is generated and scanned.
+#                Rebuilt on every run; removed only if it carries the fixture marker.
+#
+# Each host's platform is detected over ssh; key-based login is required.
+DEPLOY_HOST = user@nas:/opt/uvsh:/data/tmp/uvsh-e2e,user@localhost:/tmp/uvsh-dev:/tmp/uvsh-e2e
+
+# One-off measurements (make bench / make -f cross.mk bench): which real
+# directory to scan, optional exclude file, and how many runs. Usually set on
+# the command line for a single experiment rather than here.
+# BENCH_DIR =
+# BENCH_EXCLUDES =
+# BENCH_RUNS = 3
+
+# Platform for `make -f cross.mk cross`, which builds a binary file without
+# deploying it. Remote targets ignore these and detect each host's platform.
+# TARGET_GOOS = linux
+# TARGET_GOARCH = arm
+# TARGET_GOARM = 7
