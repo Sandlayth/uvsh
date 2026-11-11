@@ -10,8 +10,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"runtime"
-	"runtime/debug"
 	"syscall"
 )
 
@@ -24,7 +22,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fs.TextVar(&level, "log-level", slog.LevelInfo, "minimum log `level`: debug, info, warn or error")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "usage: uvsh [-log-level level] <command> [args]")
-		fmt.Fprintln(stderr, "\ncommands:\n  version    print build information")
+		fmt.Fprintln(stderr, "\ncommands:")
+		fmt.Fprintln(stderr, "  init       create or upgrade the catalog")
+		fmt.Fprintln(stderr, "  version    print build information")
 		fmt.Fprintln(stderr, "\nflags:")
 		fs.PrintDefaults()
 	}
@@ -45,6 +45,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	logger.DebugContext(ctx, "dispatch", "command", cmd, "args", cmdArgs)
 
 	switch cmd {
+	case "init":
+		return runInit(ctx, cmdArgs, stdout, stderr)
 	case "version":
 		return runVersion(stdout)
 	default:
@@ -52,22 +54,6 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		fs.Usage()
 		return errUsage
 	}
-}
-
-func runVersion(stdout io.Writer) error {
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return errors.New("build info unavailable")
-	}
-	settings := make(map[string]string, len(info.Settings))
-	for _, s := range info.Settings {
-		settings[s.Key] = s.Value
-	}
-	fmt.Fprintf(stdout, "uvsh %s\n", info.Main.Version)
-	fmt.Fprintf(stdout, "  commit:   %s (modified=%s)\n", settings["vcs.revision"], settings["vcs.modified"])
-	fmt.Fprintf(stdout, "  go:       %s\n", info.GoVersion)
-	fmt.Fprintf(stdout, "  platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
-	return nil
 }
 
 func main() {
