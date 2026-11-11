@@ -1,11 +1,17 @@
 # Developer recipes for the host machine. Cross-compiling and deploying to
 # another device live in cross.mk (run with `make -f cross.mk <target>`).
+# Personal settings (e.g. BENCH_DIR) can go in an untracked local.mk.
+-include local.mk
 
 BIN := bin
 
 GOFLAGS_BUILD := -trimpath
 
-.PHONY: build test vet fmt-check nocgo check clean
+BENCH_DIR      ?=
+BENCH_EXCLUDES ?=
+BENCH_RUNS     ?= 3
+
+.PHONY: build test vet fmt-check nocgo check e2e bench clean
 
 build:
 	go build $(GOFLAGS_BUILD) -o $(BIN)/uvsh ./cmd/uvsh
@@ -26,6 +32,16 @@ nocgo:
 
 # Everything that must pass before a commit.
 check: fmt-check vet test nocgo
+
+# Build the fixture tree in a temp dir, check uvsh against it, clean up.
+e2e: build
+	@dir=$$(mktemp -d) && trap 'scripts/mkfixture.sh -clean "$$dir/fx"; rmdir "$$dir"' EXIT && \
+	scripts/mkfixture.sh "$$dir/fx" >/dev/null && scripts/e2e.sh $(BIN)/uvsh "$$dir/fx"
+
+# Time and peak memory of a real scan: make bench BENCH_DIR=/some/dir
+bench: build
+	@test -n "$(BENCH_DIR)" || { echo "set BENCH_DIR=/dir/to/scan (and optionally BENCH_EXCLUDES, BENCH_RUNS)"; exit 1; }
+	@scripts/bench.sh $(BIN)/uvsh "$(BENCH_DIR)" "$(BENCH_EXCLUDES)" $(BENCH_RUNS)
 
 clean:
 	rm -rf $(BIN)

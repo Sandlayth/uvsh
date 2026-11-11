@@ -3,11 +3,14 @@
 #   make -f cross.mk cross    # build for TARGET_* into bin/
 #   make -f cross.mk smoke    # build, deploy to DEPLOY_HOST, run `uvsh version`
 #   make -f cross.mk fixture  # (re)build the e2e test tree in E2E_DIR on DEPLOY_HOST
+#   make -f cross.mk e2e      # deploy, rebuild the fixture, check uvsh against it
+#   make -f cross.mk bench    # time and peak memory of a scan of BENCH_DIR on DEPLOY_HOST
 #
 # Machine-specific settings live in an untracked local.mk, e.g.:
 #
 #   DEPLOY_HOST = user@host
 #   E2E_DIR = /path/on/host/uvsh-e2e
+#   BENCH_DIR = /path/on/host/to/scan
 #   TARGET_GOARCH = arm64
 #
 -include local.mk
@@ -22,10 +25,14 @@ TARGET_BIN    := $(BIN)/uvsh-$(TARGET_GOOS)-$(TARGET_GOARCH)
 
 DEPLOY_DIR ?= /opt/uvsh
 
+BENCH_DIR      ?=
+BENCH_EXCLUDES ?=
+BENCH_RUNS     ?= 3
+
 GOFLAGS_BUILD := -trimpath
 
 .DEFAULT_GOAL := cross
-.PHONY: cross deploy smoke fixture
+.PHONY: cross deploy smoke fixture e2e bench
 
 cross:
 	CGO_ENABLED=0 GOOS=$(TARGET_GOOS) GOARCH=$(TARGET_GOARCH) GOARM=$(TARGET_GOARM) \
@@ -53,3 +60,12 @@ fixture:
 	@test -n "$(E2E_DIR)" || { echo "E2E_DIR is not set; see local.mk"; exit 1; }
 	ssh $(DEPLOY_HOST) 'mkdir -p $(DEPLOY_DIR) && cat > $(DEPLOY_DIR)/mkfixture.sh' < scripts/mkfixture.sh
 	ssh $(DEPLOY_HOST) '[ ! -e $(E2E_DIR) ] || sh $(DEPLOY_DIR)/mkfixture.sh -clean $(E2E_DIR); sh $(DEPLOY_DIR)/mkfixture.sh $(E2E_DIR)'
+
+e2e: deploy fixture
+	ssh $(DEPLOY_HOST) 'cat > $(DEPLOY_DIR)/e2e.sh' < scripts/e2e.sh
+	ssh $(DEPLOY_HOST) 'sh $(DEPLOY_DIR)/e2e.sh $(DEPLOY_DIR)/uvsh $(E2E_DIR)'
+
+bench: deploy
+	@test -n "$(BENCH_DIR)" || { echo "BENCH_DIR is not set; see local.mk"; exit 1; }
+	ssh $(DEPLOY_HOST) 'cat > $(DEPLOY_DIR)/bench.sh' < scripts/bench.sh
+	ssh $(DEPLOY_HOST) 'sh $(DEPLOY_DIR)/bench.sh $(DEPLOY_DIR)/uvsh "$(BENCH_DIR)" "$(BENCH_EXCLUDES)" $(BENCH_RUNS)'

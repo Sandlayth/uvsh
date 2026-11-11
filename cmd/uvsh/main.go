@@ -24,6 +24,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stderr, "usage: uvsh [-log-level level] <command> [args]")
 		fmt.Fprintln(stderr, "\ncommands:")
 		fmt.Fprintln(stderr, "  init       create or upgrade the catalog")
+		fmt.Fprintln(stderr, "  scan       walk a directory and list what it contains")
 		fmt.Fprintln(stderr, "  version    print build information")
 		fmt.Fprintln(stderr, "\nflags:")
 		fs.PrintDefaults()
@@ -47,6 +48,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	switch cmd {
 	case "init":
 		return runInit(ctx, cmdArgs, stdout, stderr)
+	case "scan":
+		return runScan(ctx, cmdArgs, stdout, stderr, logger)
 	case "version":
 		return runVersion(stdout)
 	default:
