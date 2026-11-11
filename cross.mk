@@ -2,10 +2,12 @@
 #
 #   make -f cross.mk cross    # build for TARGET_* into bin/
 #   make -f cross.mk smoke    # build, deploy to DEPLOY_HOST, run `uvsh version`
+#   make -f cross.mk fixture  # (re)build the e2e test tree in E2E_DIR on DEPLOY_HOST
 #
 # Machine-specific settings live in an untracked local.mk, e.g.:
 #
 #   DEPLOY_HOST = user@host
+#   E2E_DIR = /path/on/host/uvsh-e2e
 #   TARGET_GOARCH = arm64
 #
 -include local.mk
@@ -23,7 +25,7 @@ DEPLOY_DIR ?= /opt/uvsh
 GOFLAGS_BUILD := -trimpath
 
 .DEFAULT_GOAL := cross
-.PHONY: cross deploy smoke
+.PHONY: cross deploy smoke fixture
 
 cross:
 	CGO_ENABLED=0 GOOS=$(TARGET_GOOS) GOARCH=$(TARGET_GOARCH) GOARM=$(TARGET_GOARM) \
@@ -43,3 +45,11 @@ deploy: cross
 
 smoke: deploy
 	ssh $(DEPLOY_HOST) '$(DEPLOY_DIR)/uvsh version'
+
+# Rebuilds the tree from scratch each time. -clean only removes a directory
+# carrying the fixture marker, so a wrong E2E_DIR fails instead of deleting data.
+fixture:
+	@test -n "$(DEPLOY_HOST)" || { echo "DEPLOY_HOST is not set; see local.mk"; exit 1; }
+	@test -n "$(E2E_DIR)" || { echo "E2E_DIR is not set; see local.mk"; exit 1; }
+	ssh $(DEPLOY_HOST) 'mkdir -p $(DEPLOY_DIR) && cat > $(DEPLOY_DIR)/mkfixture.sh' < scripts/mkfixture.sh
+	ssh $(DEPLOY_HOST) '[ ! -e $(E2E_DIR) ] || sh $(DEPLOY_DIR)/mkfixture.sh -clean $(E2E_DIR); sh $(DEPLOY_DIR)/mkfixture.sh $(E2E_DIR)'
