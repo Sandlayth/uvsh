@@ -1,16 +1,19 @@
 #!/bin/sh
 # Measure uvsh scanning a real directory: elapsed time and peak memory.
 #
-#   bench.sh UVSH_BINARY DIR [EXCLUDE_FILE] [RUNS]
+#   bench.sh UVSH_BINARY DIR [EXCLUDE_FILE] [RUNS] [DSN]
 #
-# Run 1 usually reads metadata from disk; later runs hit the OS cache.
+# Without DSN each run is a dry run. With DSN each run records into that
+# catalog: run 1 writes everything, later runs measure an unchanged rescan.
+# Run 1 usually also reads metadata from disk; later runs hit the OS cache.
 set -eu
 
-[ $# -ge 2 ] || { echo "usage: $0 UVSH_BINARY DIR [EXCLUDE_FILE] [RUNS]" >&2; exit 2; }
+[ $# -ge 2 ] || { echo "usage: $0 UVSH_BINARY DIR [EXCLUDE_FILE] [RUNS] [DSN]" >&2; exit 2; }
 UVSH=$1
 DIR=$2
 EXCLUDES=${3:-}
 RUNS=${4:-3}
+DSN=${5:-}
 
 # measure ERRFILE CMD...: run CMD with stderr in ERRFILE and print its peak
 # resident memory in KiB, sampled from the kernel's VmHWM high-water mark.
@@ -30,7 +33,7 @@ measure() {
 	echo "${hwm:-n/a}"
 }
 
-set -- scan -dry-run
+if [ -n "$DSN" ]; then set -- scan -db "$DSN"; else set -- scan -dry-run; fi
 [ -z "$EXCLUDES" ] || set -- "$@" -exclude-from "$EXCLUDES"
 
 err=$(mktemp)

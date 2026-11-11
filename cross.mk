@@ -35,4 +35,4 @@ cross:
 # Each host's platform is detected, so TARGET_* doesn't apply here.
 $(REMOTE_ACTIONS):
 	@DEPLOY_HOST='$(DEPLOY_HOST)' BENCH_DIR='$(BENCH_DIR)' BENCH_EXCLUDES='$(BENCH_EXCLUDES)' \
-		BENCH_RUNS='$(BENCH_RUNS)' scripts/remote.sh $@
+		BENCH_RUNS='$(BENCH_RUNS)' BENCH_DB='$(BENCH_DB)' scripts/remote.sh $@

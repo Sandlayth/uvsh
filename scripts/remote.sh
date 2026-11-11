@@ -15,7 +15,7 @@
 #   fixture      rebuild the e2e fixture in the scan dir
 #   e2e          deploy, rebuild the fixture, run e2e.sh against it
 #   test-remote  run the unit tests (no -race: it needs cgo)
-#   bench        deploy, then bench.sh on BENCH_DIR [BENCH_EXCLUDES] [BENCH_RUNS]
+#   bench        deploy, then bench.sh on BENCH_DIR [BENCH_EXCLUDES] [BENCH_RUNS] [BENCH_DB]
 set -eu
 
 die() {
@@ -110,7 +110,7 @@ run() {
 	fixture) fixture ;;
 	e2e) deploy && fixture >/dev/null && $SSH "$host" "sh '$runtime/e2e.sh' '$runtime/uvsh' '$scan'" ;;
 	test-remote) test_remote ;;
-	bench) deploy && $SSH "$host" "sh '$runtime/bench.sh' '$runtime/uvsh' '$BENCH_DIR' '${BENCH_EXCLUDES:-}' '${BENCH_RUNS:-3}'" ;;
+	bench) deploy && $SSH "$host" "sh '$runtime/bench.sh' '$runtime/uvsh' '$BENCH_DIR' '${BENCH_EXCLUDES:-}' '${BENCH_RUNS:-3}' '${BENCH_DB:-}'" ;;
 	esac
 }
 

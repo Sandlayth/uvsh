@@ -8,7 +8,7 @@ set -eu
 [ $# -eq 2 ] || { echo "usage: $0 UVSH_BINARY FIXTURE_DIR" >&2; exit 2; }
 UVSH=$1
 DIR=$2
-. "$DIR/expected" # defines user_is_root, files, symlinks, other, files_excluded
+. "$DIR/expected" # defines user_is_root, dirs, files, symlinks, other, dirs_excluded, files_excluded
 errors=$((1 - user_is_root)) # the locked dir is only unreadable for non-root
 
 failures=0
@@ -64,6 +64,7 @@ expect "dsn without backend rejected" fails "$UVSH" init -db "$db"
 
 summary=$("$UVSH" scan -dry-run "$DIR/tree" 2>&1 >/dev/null | grep 'scan complete' || true)
 echo "$summary"
+check "full scan" "$dirs" "$summary" dirs
 check "full scan" "$files" "$summary" files
 check "full scan" "$symlinks" "$summary" symlinks
 check "full scan" "$other" "$summary" other
@@ -71,7 +72,22 @@ check "full scan" "$errors" "$summary" errors
 
 summary=$("$UVSH" scan -dry-run -exclude-from "$DIR/excludes" "$DIR/tree" 2>&1 >/dev/null | grep 'scan complete' || true)
 echo "$summary"
+check "with excludes" "$dirs_excluded" "$summary" dirs
 check "with excludes" "$files_excluded" "$summary" files
+
+# Recording into the catalog: the first scan writes every dir and file, an
+# unchanged rescan writes nothing.
+summary=$("$UVSH" scan -db "sqlite:$db" -batch 5 "$DIR/tree" 2>&1 >/dev/null | grep 'scan complete' || true)
+echo "$summary"
+check "record" "$dirs" "$summary" dirs_written
+check "record" "$files" "$summary" files_written
+check "record" "$errors" "$summary" errors
+
+summary=$("$UVSH" scan -db "sqlite:$db" -batch 5 "$DIR/tree" 2>&1 >/dev/null | grep 'scan complete' || true)
+echo "$summary"
+check "rescan" 0 "$summary" dirs_written
+check "rescan" 0 "$summary" files_written
+check "rescan" "$files" "$summary" files_unchanged
 
 [ "$failures" -eq 0 ] || { echo "$failures check(s) failed" >&2; exit 1; }
 echo "all checks passed"

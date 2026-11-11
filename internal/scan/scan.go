@@ -16,6 +16,7 @@ type Kind uint8
 
 const (
 	File Kind = iota + 1 // regular file
+	Dir
 	Symlink
 	Other
 )
@@ -24,6 +25,8 @@ func (k Kind) String() string {
 	switch k {
 	case File:
 		return "file"
+	case Dir:
+		return "dir"
 	case Symlink:
 		return "link"
 	case Other:
@@ -73,9 +76,7 @@ func Walk(ctx context.Context, fsys fs.FS, opts Options) iter.Seq2[Entry, error]
 				}
 				return nil
 			}
-			if d.IsDir() {
-				return nil
-			}
+			// Directories are yielded before their contents, the root (".") first.
 			if !yield(entry(fsys, p, d)) {
 				return fs.SkipAll
 			}
@@ -93,6 +94,9 @@ func entry(fsys fs.FS, p string, d fs.DirEntry) (Entry, error) {
 	switch mode := info.Mode(); {
 	case mode.IsRegular():
 		e.Kind = File
+	case mode.IsDir():
+		e.Kind = Dir
+		e.Size = 0
 	case mode&fs.ModeSymlink != 0:
 		e.Kind = Symlink
 		e.Target, err = fs.ReadLink(fsys, p)

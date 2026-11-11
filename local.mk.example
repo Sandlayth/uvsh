@@ -19,11 +19,13 @@
 DEPLOY_HOST = user@nas:/opt/uvsh:/data/tmp/uvsh-e2e,user@localhost:/tmp/uvsh-dev:/tmp/uvsh-e2e
 
 # One-off measurements (make bench / make -f cross.mk bench): which real
-# directory to scan, optional exclude file, and how many runs. Usually set on
-# the command line for a single experiment rather than here.
+# directory to scan, optional exclude file, how many runs, and optionally a
+# catalog dsn to record into (dry runs otherwise). Usually set on the command
+# line for a single experiment rather than here.
 # BENCH_DIR =
 # BENCH_EXCLUDES =
 # BENCH_RUNS = 3
+# BENCH_DB = sqlite:/path/on/host/bench.db
 
 # Platform for `make -f cross.mk cross`, which builds a binary file without
 # deploying it. Remote targets ignore these and detect each host's platform.

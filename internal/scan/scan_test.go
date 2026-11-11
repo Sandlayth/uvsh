@@ -94,6 +94,11 @@ func TestWalkReportsEveryKind(t *testing.T) {
 	}
 
 	want := map[string]Entry{
+		".":                {Kind: Dir},
+		"dir":              {Kind: Dir},
+		"dir/.cache":       {Kind: Dir},
+		"#trash":           {Kind: Dir},
+		"links":            {Kind: Dir},
 		"a.txt":            {Kind: File, Size: 3, ModTime: stamp},
 		"dir/b.txt":        {Kind: File, Size: 5, ModTime: stamp},
 		"dir/.cache/c.txt": {Kind: File, Size: 1, ModTime: stamp},
@@ -136,7 +141,7 @@ func TestWalkExcludes(t *testing.T) {
 	if len(errs) > 0 {
 		t.Fatalf("unexpected errors: %v", errs)
 	}
-	for _, p := range []string{"dir/.cache/c.txt", "x.tmp", "#trash/d.txt", "links/loop-a", "links/loop-b"} {
+	for _, p := range []string{"dir/.cache", "dir/.cache/c.txt", "x.tmp", "#trash", "#trash/d.txt", "links/loop-a", "links/loop-b"} {
 		if _, ok := entries[p]; ok {
 			t.Errorf("%s should be excluded", p)
 		}

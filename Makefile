@@ -10,6 +10,7 @@ GOFLAGS_BUILD := -trimpath
 BENCH_DIR      ?=
 BENCH_EXCLUDES ?=
 BENCH_RUNS     ?= 3
+BENCH_DB       ?=
 
 .PHONY: build test vet fmt-check nocgo check e2e bench clean
 
@@ -40,8 +41,8 @@ e2e: build
 
 # Time and peak memory of a real scan: make bench BENCH_DIR=/some/dir
 bench: build
-	@test -n "$(BENCH_DIR)" || { echo "set BENCH_DIR=/dir/to/scan (and optionally BENCH_EXCLUDES, BENCH_RUNS)"; exit 1; }
-	@scripts/bench.sh $(BIN)/uvsh "$(BENCH_DIR)" "$(BENCH_EXCLUDES)" $(BENCH_RUNS)
+	@test -n "$(BENCH_DIR)" || { echo "set BENCH_DIR=/dir/to/scan (and optionally BENCH_EXCLUDES, BENCH_RUNS, BENCH_DB)"; exit 1; }
+	@scripts/bench.sh $(BIN)/uvsh "$(BENCH_DIR)" "$(BENCH_EXCLUDES)" $(BENCH_RUNS) "$(BENCH_DB)"
 
 clean:
 	rm -rf $(BIN)

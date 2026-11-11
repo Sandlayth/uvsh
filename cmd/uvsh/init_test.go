@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -26,8 +27,8 @@ func TestInit(t *testing.T) {
 		if err := run(t.Context(), []string{"uvsh", "init", "-db", dsn}, &stdout, &stderr); err != nil {
 			t.Fatalf("run() error = %v, stderr = %q", err, stderr.String())
 		}
-		if want := "schema v1"; !strings.Contains(stdout.String(), want) {
-			t.Errorf("stdout = %q, want substring %q", stdout.String(), want)
+		if !regexp.MustCompile(`schema v[0-9]+\n`).MatchString(stdout.String()) {
+			t.Errorf("stdout = %q, want a schema version", stdout.String())
 		}
 	}
 }

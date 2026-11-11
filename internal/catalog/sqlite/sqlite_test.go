@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -146,20 +147,30 @@ func TestStrictAndReadOnlyEnforcement(t *testing.T) {
 	c, _ := openTest(t)
 	ctx := t.Context()
 	mustExec(t, ctx, c.writer, "INSERT INTO roots (id, path, added_ns) VALUES (1, '/data', 0)")
+	mustExec(t, ctx, c.writer, "INSERT INTO dirs (id, root_id, parent_id, name, mtime_ns) VALUES (1, 1, NULL, '', 0)")
 
+	// wantErr is a substring of the expected error, so a statement failing
+	// for an unrelated reason (a renamed column) doesn't pass.
 	tests := []struct {
-		name string
-		db   *sql.DB
-		stmt string
+		name    string
+		db      *sql.DB
+		stmt    string
+		wantErr string
 	}{
-		{"strict rejects text in INTEGER column", c.writer, "INSERT INTO files (root_id, rel_path, size, mtime_ns) VALUES (1, 'a', 'big', 0)"},
-		{"foreign key rejects unknown root", c.writer, "INSERT INTO files (root_id, rel_path, size, mtime_ns) VALUES (42, 'a', 1, 0)"},
-		{"reader pool cannot write", c.reader, "INSERT INTO roots (path, added_ns) VALUES ('/other', 0)"},
+		{"valid row is accepted", c.writer, "INSERT INTO files (dir_id, name, size, mtime_ns) VALUES (1, 'ok', 1, 0)", ""},
+		{"strict rejects text in INTEGER column", c.writer, "INSERT INTO files (dir_id, name, size, mtime_ns) VALUES (1, 'a', 'big', 0)", "cannot store TEXT value in INTEGER column"},
+		{"foreign key rejects unknown dir", c.writer, "INSERT INTO files (dir_id, name, size, mtime_ns) VALUES (42, 'a', 1, 0)", "FOREIGN KEY constraint failed"},
+		{"one root dir per root", c.writer, "INSERT INTO dirs (root_id, parent_id, name, mtime_ns) VALUES (1, NULL, '', 0)", "UNIQUE constraint failed"},
+		{"reader pool cannot write", c.reader, "INSERT INTO roots (path, added_ns) VALUES ('/other', 0)", "readonly"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := tt.db.ExecContext(ctx, tt.stmt); err == nil {
-				t.Errorf("statement succeeded, want error")
+			_, err := tt.db.ExecContext(ctx, tt.stmt)
+			switch {
+			case tt.wantErr == "" && err != nil:
+				t.Errorf("unexpected error: %v", err)
+			case tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)):
+				t.Errorf("error = %v, want one containing %q", err, tt.wantErr)
 			}
 		})
 	}
