@@ -8,8 +8,11 @@ import (
 	"time"
 )
 
-// ErrSchemaTooNew is returned when the catalog was written by a newer uvsh.
-var ErrSchemaTooNew = errors.New("catalog schema is newer than this binary")
+var (
+	ErrSchemaTooNew = errors.New("catalog schema is newer than this binary")
+	ErrNotFound     = errors.New("not in the catalog")
+	ErrNotDir       = errors.New("not a directory")
+)
 
 // Catalog is what every storage engine provides.
 type Catalog interface {
@@ -17,8 +20,47 @@ type Catalog interface {
 	// BeginScan registers root (an absolute path) and returns a writer for one
 	// walk of it.
 	BeginScan(ctx context.Context, root string, opts ScanOptions) (ScanWriter, error)
+	Roots(ctx context.Context) ([]Root, error)
+	Stat(ctx context.Context, path string) (Entry, error)
+	List(ctx context.Context, path string, after Cursor, limit int) ([]Entry, error)
 	Close() error
 }
+
+type Root struct {
+	Path  string
+	Added time.Time
+}
+
+type Kind int
+
+const (
+	Dir Kind = iota
+	File
+)
+
+func (k Kind) String() string {
+	switch k {
+	case Dir:
+		return "dir"
+	case File:
+		return "file"
+	}
+	return "unknown"
+}
+
+type Entry struct {
+	Name    string
+	Kind    Kind
+	Size    int64 // 0 for dirs
+	ModTime time.Time
+}
+
+type Cursor struct {
+	Name string
+	Kind Kind
+}
+
+func (e Entry) Cursor() Cursor { return Cursor{e.Name, e.Kind} }
 
 // Info describes the state of an opened catalog.
 type Info struct {
