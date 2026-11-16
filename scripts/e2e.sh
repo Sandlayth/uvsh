@@ -94,5 +94,23 @@ overlap_refused() { "$UVSH" scan -db "sqlite:$db" "$1" 2>&1 >/dev/null | grep -q
 expect "root inside a root refused" overlap_refused "$DIR/tree/photos"
 expect "root containing a root refused" overlap_refused "$DIR"
 
+# Browsing: ls must list what find sees directly in each dir (files and dirs
+# only, until symlinks are recorded). One line per entry, even for hostile
+# names, so lines count entries.
+children() { find "$1/." ! -name . -prune \( -type f -o -type d \) -exec printf '.' \; 2>/dev/null | wc -c | tr -d ' '; }
+for d in "" /names /photos/2023 /deep/a/b/c/d/e/f/g/h /links /special /locked; do
+	want=$(children "$DIR/tree$d")
+	got=$("$UVSH" ls -db "sqlite:$db" "$DIR/tree$d" 2>/dev/null | wc -l | tr -d ' ')
+	expect "ls tree$d lists $want entries (got $got)" [ "$got" = "$want" ]
+done
+same_pages() { [ "$("$UVSH" ls -db "sqlite:$db" -page 1 "$1")" = "$("$UVSH" ls -db "sqlite:$db" "$1")" ]; }
+expect "ls -page 1 matches one page (tree)" same_pages "$DIR/tree"
+expect "ls -page 1 matches one page (names)" same_pages "$DIR/tree/names"
+real=$(cd "$DIR/tree" && pwd -P)
+roots=$("$UVSH" ls -db "sqlite:$db" 2>/dev/null || true)
+expect "ls lists the one root" [ "$(printf '%s\n' "$roots" | cut -f4)" = "$real" ]
+exits_1() { "$@" >/dev/null 2>&1 && return 1; [ $? -eq 1 ]; }
+expect "ls of a path not in the catalog exits 1" exits_1 "$UVSH" ls -db "sqlite:$db" "$DIR/tree/nope"
+
 [ "$failures" -eq 0 ] || { echo "$failures check(s) failed" >&2; exit 1; }
 echo "all checks passed"
