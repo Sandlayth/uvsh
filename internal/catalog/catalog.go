@@ -12,6 +12,7 @@ var (
 	ErrSchemaTooNew = errors.New("catalog schema is newer than this binary")
 	ErrNotFound     = errors.New("not in the catalog")
 	ErrNotDir       = errors.New("not a directory")
+	ErrRootOverlap  = errors.New("overlaps the registered root")
 )
 
 // Catalog is what every storage engine provides.
@@ -33,6 +34,7 @@ type Root struct {
 
 type Kind int
 
+// The values order a dir before a file of the same name
 const (
 	Dir Kind = iota
 	File

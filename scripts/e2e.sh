@@ -89,5 +89,10 @@ check "rescan" 0 "$summary" dirs_written
 check "rescan" 0 "$summary" files_written
 check "rescan" "$files" "$summary" files_unchanged
 
+# The tree is now a registered root: nothing inside or around it may be one.
+overlap_refused() { "$UVSH" scan -db "sqlite:$db" "$1" 2>&1 >/dev/null | grep -q 'overlaps the registered root'; }
+expect "root inside a root refused" overlap_refused "$DIR/tree/photos"
+expect "root containing a root refused" overlap_refused "$DIR"
+
 [ "$failures" -eq 0 ] || { echo "$failures check(s) failed" >&2; exit 1; }
 echo "all checks passed"

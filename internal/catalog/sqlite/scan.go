@@ -55,15 +55,42 @@ func (c *Catalog) registerRoot(ctx context.Context, root string) (int64, error) 
 		return 0, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO roots (path, added_ns) VALUES (?, ?) ON CONFLICT (path) DO NOTHING`,
-		root, time.Now().UnixNano()); err != nil {
+	var id int64
+	err = tx.QueryRowContext(ctx, `SELECT id FROM roots WHERE path = ?`, root).Scan(&id)
+	if !errors.Is(err, sql.ErrNoRows) {
+		return id, err // already registered, or a real error
+	}
+	// The write lock is held since BEGIN, so a concurrent scan can't register
+	// an overlapping root between this check and the insert.
+	registered, err := rootPathsTx(ctx, tx)
+	if err != nil {
 		return 0, err
 	}
-	var id int64
-	if err := tx.QueryRowContext(ctx, `SELECT id FROM roots WHERE path = ?`, root).Scan(&id); err != nil {
+	if err := catalog.CheckRoot(root, registered); err != nil {
+		return 0, err
+	}
+	if err := tx.QueryRowContext(ctx, `INSERT INTO roots (path, added_ns) VALUES (?, ?) RETURNING id`,
+		root, time.Now().UnixNano()).Scan(&id); err != nil {
 		return 0, err
 	}
 	return id, tx.Commit()
+}
+
+func rootPathsTx(ctx context.Context, tx *sql.Tx) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT path FROM roots`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var paths []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		paths = append(paths, p)
+	}
+	return paths, rows.Err()
 }
 
 type scanWriter struct {

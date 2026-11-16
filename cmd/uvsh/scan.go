@@ -60,6 +60,9 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer, logge
 	if err != nil {
 		return err
 	}
+	if dir, err = filepath.EvalSymlinks(dir); err != nil {
+		return err
+	}
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return err

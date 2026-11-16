@@ -2,11 +2,14 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sandlayth/uvsh/internal/catalog"
 )
 
 func TestScanUsage(t *testing.T) {
@@ -87,5 +90,24 @@ func TestScanRecord(t *testing.T) {
 	}
 	if s := scanOnce(); !strings.Contains(s, "dirs_written=0 files_written=0 files_unchanged=2") {
 		t.Errorf("rescan summary = %q", s)
+	}
+}
+
+func TestScanRootRealPath(t *testing.T) {
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	must(t, err)
+	real := filepath.Join(tmp, "real")
+	must(t, os.MkdirAll(filepath.Join(real, "sub"), 0o755))
+	must(t, os.Symlink(real, filepath.Join(tmp, "alias")))
+	dsn := "sqlite:" + filepath.Join(t.TempDir(), "catalog.db")
+
+	scan := func(dir string) error {
+		var stdout, stderr bytes.Buffer
+		return run(t.Context(), []string{"uvsh", "scan", "-db", dsn, dir}, &stdout, &stderr)
+	}
+	must(t, scan(filepath.Join(tmp, "alias")))
+	// Only overlaps if the alias was registered as its real path.
+	if err := scan(filepath.Join(real, "sub")); !errors.Is(err, catalog.ErrRootOverlap) {
+		t.Errorf("scan inside the root aliased by a symlink: error = %v, want ErrRootOverlap", err)
 	}
 }
