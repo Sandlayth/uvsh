@@ -109,6 +109,16 @@ expect "ls -page 1 matches one page (names)" same_pages "$DIR/tree/names"
 real=$(cd "$DIR/tree" && pwd -P)
 roots=$("$UVSH" ls -db "sqlite:$db" 2>/dev/null || true)
 expect "ls lists the one root" [ "$(printf '%s\n' "$roots" | cut -f4)" = "$real" ]
+
+# Round trip: the catalog must hold exactly what the walker saw, entry for
+# entry and in the same order (minus what isn't recorded yet).
+same() { cmp -s "$1" "$2" || { diff "$1" "$2" | head -20; return 1; }; }
+"$UVSH" scan -dry-run "$DIR/tree" 2>/dev/null | grep -v -e '^link	' -e '^other	' >"$DIR/walk.out" || true
+"$UVSH" ls -db "sqlite:$db" -R "$DIR/tree" >"$DIR/tree.out" 2>&1 || true
+"$UVSH" ls -db "sqlite:$db" -R -page 1 "$DIR/tree" >"$DIR/tree.page1.out" 2>&1 || true
+expect "ls -R matches scan -dry-run ($(wc -l <"$DIR/walk.out" | tr -d ' ') lines)" same "$DIR/walk.out" "$DIR/tree.out"
+expect "ls -R -page 1 matches one page" same "$DIR/tree.out" "$DIR/tree.page1.out"
+
 exits_1() { "$@" >/dev/null 2>&1 && return 1; [ $? -eq 1 ]; }
 expect "ls of a path not in the catalog exits 1" exits_1 "$UVSH" ls -db "sqlite:$db" "$DIR/tree/nope"
 

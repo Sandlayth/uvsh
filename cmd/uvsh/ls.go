@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -21,8 +22,10 @@ func runLs(ctx context.Context, args []string, stdout, stderr io.Writer) (err er
 	page := fs.Int("page", 1000, "entries fetched per catalog query")
 	after := fs.String("after", "", "start after the entries named `name`")
 	limit := fs.Int("limit", 0, "stop after `n` entries (0: no limit)")
+	recursive := fs.Bool("R", false, "list everything below path, depth first, as scan -dry-run prints it")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "usage: uvsh ls -db dsn [-page n] [-after name] [-limit n] [path]")
+		fmt.Fprintln(stderr, "       uvsh ls -db dsn -R [-page n] path")
 		fmt.Fprintln(stderr, "\nList a directory from the catalog, without touching the disk. Without a path,")
 		fmt.Fprintln(stderr, "list the registered roots.")
 		fmt.Fprintln(stderr, "\nflags:")
@@ -35,7 +38,7 @@ func runLs(ctx context.Context, args []string, stdout, stderr io.Writer) (err er
 		return errUsage
 	}
 	pageOpts := *after != "" || *limit != 0
-	if *dsn == "" || fs.NArg() > 1 || *page < 1 || *limit < 0 || (fs.NArg() == 0 && pageOpts) {
+	if *dsn == "" || fs.NArg() > 1 || *page < 1 || *limit < 0 || (fs.NArg() == 0 && (pageOpts || *recursive)) || (*recursive && pageOpts) {
 		fs.Usage()
 		return errUsage
 	}
@@ -61,6 +64,9 @@ func runLs(ctx context.Context, args []string, stdout, stderr io.Writer) (err er
 	dir, err := filepath.Abs(fs.Arg(0))
 	if err != nil {
 		return err
+	}
+	if *recursive {
+		return listTree(ctx, cat, dir, *page, stdout)
 	}
 	// File sorts after Dir, so this cursor skips both entries named -after.
 	cursor := catalog.Cursor{Name: *after, Kind: catalog.File}
@@ -89,6 +95,66 @@ func runLs(ctx context.Context, args []string, stdout, stderr io.Writer) (err er
 			break
 		}
 		cursor = entries[len(entries)-1].Cursor()
+	}
+	return nil
+}
+
+// listTree prints dir and everything below it, in the order fs.WalkDir visits
+// a disk: each dir right before its contents, names in byte order. Paths are
+// relative to dir, starting with ".". The stack holds one frame per open dir,
+// each with its current page, so memory is depth × page, not the tree's size.
+func listTree(ctx context.Context, cat catalog.Catalog, dir string, page int, w io.Writer) error {
+	top, err := cat.Stat(ctx, dir)
+	if err != nil {
+		return err
+	}
+	if top.Kind != catalog.Dir {
+		printCatalogEntry(w, top)
+		return nil
+	}
+	top.Name = "."
+	printCatalogEntry(w, top)
+
+	type frame struct {
+		rel     string // slash-separated, relative to dir
+		entries []catalog.Entry
+		next    int  // index of the next entry to print
+		more    bool // the last page was full, so another may follow
+	}
+	fetch := func(f *frame, after catalog.Cursor) error {
+		var err error
+		f.entries, err = cat.List(ctx, filepath.Join(dir, filepath.FromSlash(f.rel)), after, page)
+		f.next, f.more = 0, len(f.entries) == page
+		return err
+	}
+	stack := []*frame{{rel: "."}}
+	if err := fetch(stack[0], catalog.Cursor{}); err != nil {
+		return err
+	}
+	for len(stack) > 0 {
+		f := stack[len(stack)-1]
+		if f.next == len(f.entries) {
+			if !f.more {
+				stack = stack[:len(stack)-1]
+				continue
+			}
+			if err := fetch(f, f.entries[len(f.entries)-1].Cursor()); err != nil {
+				return err
+			}
+			continue
+		}
+		e := f.entries[f.next]
+		f.next++
+		rel := path.Join(f.rel, e.Name)
+		e.Name = rel
+		printCatalogEntry(w, e)
+		if e.Kind == catalog.Dir {
+			child := &frame{rel: rel}
+			if err := fetch(child, catalog.Cursor{}); err != nil {
+				return err
+			}
+			stack = append(stack, child)
+		}
 	}
 	return nil
 }

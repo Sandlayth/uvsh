@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,6 +49,9 @@ func TestLsUsage(t *testing.T) {
 		{name: "rejects negative limit", args: []string{"uvsh", "ls", "-db", "sqlite:x.db", "-limit", "-1", "/data"}, wantErr: errUsage, wantStderr: "usage: uvsh ls"},
 		{name: "rejects two paths", args: []string{"uvsh", "ls", "-db", "sqlite:x.db", "/a", "/b"}, wantErr: errUsage, wantStderr: "usage: uvsh ls"},
 		{name: "rejects paging the roots", args: []string{"uvsh", "ls", "-db", "sqlite:x.db", "-limit", "1"}, wantErr: errUsage, wantStderr: "usage: uvsh ls"},
+		{name: "rejects -R without a path", args: []string{"uvsh", "ls", "-db", "sqlite:x.db", "-R"}, wantErr: errUsage, wantStderr: "usage: uvsh ls"},
+		{name: "rejects -R with -limit", args: []string{"uvsh", "ls", "-db", "sqlite:x.db", "-R", "-limit", "1", "/data"}, wantErr: errUsage, wantStderr: "usage: uvsh ls"},
+		{name: "rejects -R with -after", args: []string{"uvsh", "ls", "-db", "sqlite:x.db", "-R", "-after", "a", "/data"}, wantErr: errUsage, wantStderr: "usage: uvsh ls"},
 		{name: "help", args: []string{"uvsh", "ls", "-h"}, wantStderr: "usage: uvsh ls"},
 	})
 }
@@ -110,5 +114,39 @@ func TestLsNotFound(t *testing.T) {
 		if _, err := ls(t, "-db", dsn, p); !errors.Is(err, catalog.ErrNotFound) {
 			t.Errorf("ls %s: error = %v, want ErrNotFound", p, err)
 		}
+	}
+}
+
+// ls -R must print exactly what scan -dry-run prints for the same tree: the
+// catalog round-trips the walk, entry for entry and in the same order.
+func TestLsRecursiveMatchesDryRun(t *testing.T) {
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	must(t, err)
+	root := filepath.Join(tmp, "data")
+	for _, d := range []string{"a/b/c", "a/z", "b", "empty", "new\nline"} {
+		must(t, os.MkdirAll(filepath.Join(root, d), 0o755))
+	}
+	for _, f := range []string{"a/b/c/deep.txt", "a/b/x.txt", "a/m.txt", "a/z/last.txt", "b.txt", "new\nline/f", "\xff.bin", "B.txt"} {
+		must(t, os.WriteFile(filepath.Join(root, f), []byte(f), 0o644))
+	}
+	dsn := "sqlite:" + filepath.Join(t.TempDir(), "catalog.db")
+
+	var dryRun, stderr bytes.Buffer
+	must(t, run(t.Context(), []string{"uvsh", "scan", "-dry-run", root}, &dryRun, &stderr))
+	must(t, run(t.Context(), []string{"uvsh", "scan", "-db", dsn, root}, io.Discard, &stderr))
+
+	for _, page := range []string{"1", "2", "1000"} {
+		got, err := ls(t, "-db", dsn, "-R", "-page", page, root)
+		if err != nil {
+			t.Fatalf("ls -R -page %s: %v", page, err)
+		}
+		if got != dryRun.String() {
+			t.Errorf("ls -R -page %s =\n%s\nscan -dry-run =\n%s", page, got, dryRun.String())
+		}
+	}
+
+	got, err := ls(t, "-db", dsn, "-R", root+"/a/b/x.txt")
+	if err != nil || !strings.HasSuffix(got, "\tx.txt\n") || strings.Count(got, "\n") != 1 {
+		t.Errorf("ls -R on a file = %q, %v; want its one line", got, err)
 	}
 }
