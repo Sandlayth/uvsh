@@ -158,6 +158,8 @@ func printEntry(w io.Writer, e scan.Entry) {
 	switch e.Kind {
 	case scan.File:
 		fmt.Fprintf(w, "%s\t%d\t%s\t%s\n", e.Kind, e.Size, e.ModTime.UTC().Format(time.RFC3339), quoteIfNeeded(e.Path))
+	case scan.Dir:
+		fmt.Fprintf(w, "%s\t-\t%s\t%s\n", e.Kind, e.ModTime.UTC().Format(time.RFC3339), quoteIfNeeded(e.Path))
 	case scan.Symlink:
 		fmt.Fprintf(w, "%s\t-\t-\t%s -> %s\n", e.Kind, quoteIfNeeded(e.Path), quoteIfNeeded(e.Target))
 	default:

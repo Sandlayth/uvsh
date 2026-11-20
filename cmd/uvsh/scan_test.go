@@ -31,6 +31,7 @@ func TestScanDryRun(t *testing.T) {
 		must(t, os.Chtimes(p, stamp, stamp))
 	}
 	must(t, os.Symlink("a.txt", filepath.Join(dir, "link")))
+	must(t, os.Chtimes(dir, stamp, stamp))
 	excludes := filepath.Join(t.TempDir(), "excludes")
 	must(t, os.WriteFile(excludes, []byte("*.tmp\n"), 0o644))
 
@@ -39,7 +40,7 @@ func TestScanDryRun(t *testing.T) {
 		t.Fatalf("run() error = %v, stderr = %q", err, stderr.String())
 	}
 
-	want := "dir\t-\t-\t.\n" +
+	want := "dir\t-\t2023-01-15T12:30:00Z\t.\n" +
 		"file\t3\t2023-01-15T12:30:00Z\ta.txt\n" +
 		"link\t-\t-\tlink -> a.txt\n" +
 		"file\t1\t2023-01-15T12:30:00Z\t\"new\\nline.txt\"\n"
