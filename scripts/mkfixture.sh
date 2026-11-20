@@ -14,6 +14,9 @@
 # POSIX sh plus `head -c` (GNU coreutils and BusyBox both have it).
 set -eu
 
+# touch -t reads local time; pin it so every machine builds the same timestamps.
+export TZ=UTC
+
 MARKER=.uvsh-fixture
 STAMP=202301151230.00 # touch -t format: CCYYMMDDhhmm.SS
 
