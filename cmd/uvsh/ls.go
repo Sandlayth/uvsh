@@ -13,6 +13,7 @@ import (
 	"github.com/sandlayth/uvsh/internal/catalog"
 	"github.com/sandlayth/uvsh/internal/catalog/backend"
 	"github.com/sandlayth/uvsh/internal/index"
+	"github.com/sandlayth/uvsh/internal/uvsh"
 )
 
 func runLs(ctx context.Context, args []string, stdout, stderr io.Writer) (err error) {
@@ -65,12 +66,34 @@ func runLs(ctx context.Context, args []string, stdout, stderr io.Writer) (err er
 	if err != nil {
 		return err
 	}
+	// show prints e, found at p; a link gets its status as a fifth column.
+	show := func(p string, e uvsh.Entry) error {
+		tag := ""
+		if e.Kind == uvsh.Symlink {
+			s, err := index.ResolveLink(ctx, cat, p, e.Target)
+			if err != nil {
+				return err
+			}
+			tag = "[" + s.String() + "]"
+		}
+		printEntry(stdout, e, tag)
+		return nil
+	}
+
 	if *recursive {
+		first := true
 		for e, err := range index.Tree(ctx, cat, dir, *page) {
 			if err != nil {
 				return err
 			}
-			printEntry(stdout, e)
+			p := filepath.Join(dir, filepath.FromSlash(e.Path))
+			if first && e.Path != "." {
+				p = dir // a non-dir: Tree yields just it, under its base name
+			}
+			first = false
+			if err := show(p, e); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -83,13 +106,14 @@ func runLs(ctx context.Context, args []string, stdout, stderr io.Writer) (err er
 			if e, err = cat.Stat(ctx, dir); err != nil {
 				return err
 			}
-			printEntry(stdout, e)
-			return nil
+			return show(dir, e)
 		}
 		if err != nil {
 			return err
 		}
-		printEntry(stdout, e)
+		if err := show(filepath.Join(dir, e.Path), e); err != nil {
+			return err
+		}
 		if printed++; printed == *limit {
 			break
 		}

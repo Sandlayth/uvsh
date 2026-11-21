@@ -33,22 +33,9 @@ func Resolve(ctx context.Context, l Lookup, path string) (Node, error) {
 	path = filepath.Clean(path)
 	notFound := fmt.Errorf("%s: %w", path, ErrNotFound)
 
-	// Try path, then each parent: one lookup per level.
-	var n Node
-	root := path
-	for {
-		var ok bool
-		var err error
-		if n, ok, err = l.Root(ctx, root); err != nil {
-			return Node{}, err
-		} else if ok {
-			break
-		}
-		parent := filepath.Dir(root)
-		if parent == root {
-			return Node{}, notFound
-		}
-		root = parent
+	root, n, err := FindRoot(ctx, l, path)
+	if err != nil {
+		return Node{}, err
 	}
 	n.Path = filepath.Base(root)
 
@@ -61,7 +48,6 @@ func Resolve(ctx context.Context, l Lookup, path string) (Node, error) {
 			return Node{}, notFound // links are never followed
 		}
 		var ok bool
-		var err error
 		if n, ok, err = l.Child(ctx, n, name); err != nil {
 			return Node{}, err
 		} else if !ok {
@@ -69,4 +55,21 @@ func Resolve(ctx context.Context, l Lookup, path string) (Node, error) {
 		}
 	}
 	return n, nil
+}
+
+// FindRoot returns the most specific registered root containing the clean,
+// absolute path, and the root's top dir. It tries path, then each parent:
+// one lookup per level.
+func FindRoot(ctx context.Context, l Lookup, path string) (string, Node, error) {
+	for root := path; ; {
+		n, ok, err := l.Root(ctx, root)
+		if err != nil || ok {
+			return root, n, err
+		}
+		parent := filepath.Dir(root)
+		if parent == root {
+			return "", Node{}, fmt.Errorf("%s: %w", path, ErrNotFound)
+		}
+		root = parent
+	}
 }

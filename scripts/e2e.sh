@@ -117,10 +117,25 @@ expect "ls lists the one root" [ "$(printf '%s\n' "$roots" | cut -f4)" = "$real"
 # entry and in the same order (minus what isn't recorded yet).
 same() { cmp -s "$1" "$2" || { diff "$1" "$2" | head -20; return 1; }; }
 "$UVSH" scan -dry-run "$DIR/tree" 2>/dev/null | grep -v '^other	' >"$DIR/walk.out" || true
-"$UVSH" ls -db "sqlite:$db" -R "$DIR/tree" >"$DIR/tree.out" 2>&1 || true
-"$UVSH" ls -db "sqlite:$db" -R -page 1 "$DIR/tree" >"$DIR/tree.page1.out" 2>&1 || true
+# ls adds a [status] column to links, which the walker can't know.
+tab=$(printf '\t')
+"$UVSH" ls -db "sqlite:$db" -R "$DIR/tree" 2>&1 | sed "s/$tab\[[a-z]*\]\$//" >"$DIR/tree.out" || true
+"$UVSH" ls -db "sqlite:$db" -R -page 1 "$DIR/tree" 2>&1 | sed "s/$tab\[[a-z]*\]\$//" >"$DIR/tree.page1.out" || true
 expect "ls -R matches scan -dry-run ($(wc -l <"$DIR/walk.out" | tr -d ' ') lines)" same "$DIR/walk.out" "$DIR/tree.out"
 expect "ls -R -page 1 matches one page" same "$DIR/tree.out" "$DIR/tree.page1.out"
+
+# What each fixture link resolves to, judged from its own root.
+statuses=$("$UVSH" ls -db "sqlite:$db" "$DIR/tree/links" 2>/dev/null | awk -F'\t' '{ sub(/ -> .*/, "", $4); print $4, $5 }')
+want_statuses='absolute [outside]
+chain-1 [file]
+chain-2 [file]
+dangling [dangling]
+loop-a [loop]
+loop-b [loop]
+to-dir [dir]
+to-file [file]
+to-outside [outside]'
+expect "ls shows each link's status" [ "$statuses" = "$want_statuses" ]
 
 exits_1() { "$@" >/dev/null 2>&1 && return 1; [ $? -eq 1 ]; }
 expect "ls of a path not in the catalog exits 1" exits_1 "$UVSH" ls -db "sqlite:$db" "$DIR/tree/nope"

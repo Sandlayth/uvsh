@@ -61,7 +61,7 @@ func TestLs(t *testing.T) {
 	// os.Chtimes follows links, so the link keeps its creation time.
 	y, err := os.Lstat(filepath.Join(root, "y"))
 	must(t, err)
-	link := "link\t-\t" + y.ModTime().UTC().Format(time.RFC3339) + "\ty -> a.txt\n"
+	link := "link\t-\t" + y.ModTime().UTC().Format(time.RFC3339) + "\ty -> a.txt\t[file]\n"
 	full := "file\t3\t2023-01-15T12:30:00Z\ta.txt\n" +
 		"file\t1\t2023-01-15T12:30:00Z\t\"new\\nline.txt\"\n" +
 		"dir\t-\t2023-01-15T12:30:00Z\tsub\n" + link +

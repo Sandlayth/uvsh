@@ -63,7 +63,7 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer, logge
 	var rep index.Report
 	if *dsn == "" {
 		rep, err = index.Walk(ctx, fs.Arg(0), opts, func(e uvsh.Entry) error {
-			printEntry(stdout, e)
+			printEntry(stdout, e, "")
 			return nil
 		})
 	} else {
