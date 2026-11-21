@@ -91,12 +91,20 @@ fixture() {
 }
 
 test_remote() {
-	[ -d "$out/test" ] || gobuild go test -c -o "$out/test/" ./... >/dev/null || return 1
+	if [ ! -d "$out/test" ]; then
+		# One binary per package with tests, named after its path: go test -c
+		# would name both cmd/uvsh and internal/uvsh uvsh.test.
+		module=$(go list -m) || return 1
+		for pkg in $(go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' ./...); do
+			name=$(printf '%s' "${pkg#"$module"/}" | sed 's#^internal/##; s#/#-#g')
+			gobuild go test -c -o "$out/test/$name.test" "$pkg" >/dev/null || { rm -rf "$out/test"; return 1; }
+		done
+	fi
 	t=$runtime/test
 	tar -C "$out/test" -c . | $SSH "$host" "rm -rf '$t' && mkdir -p '$t' && tar -x -C '$t'" || return 1
 	$SSH "$host" "cd '$t' && rc=0
 		for f in *.test; do
-			printf '   %-14s ' \"\$f\"
+			printf '   %-24s ' \"\$f\"
 			if ./\"\$f\" >out 2>&1; then echo ok; else echo FAIL; cat out; rc=1; fi
 		done
 		cd / && rm -rf '$t'
