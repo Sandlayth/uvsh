@@ -38,7 +38,9 @@ func (c *Catalog) BeginScan(ctx context.Context, root string, opts catalog.ScanO
 		return nil, fmt.Errorf("register root %s: %w", root, err)
 	}
 
-	w := &scanWriter{db: c.writer, rootID: rootID, batchSize: opts.BatchSize}
+	w := &scanWriter{db: c.writer, rootID: rootID, batchSize: opts.BatchSize, stats: catalog.ScanStats{
+		Written: map[catalog.Kind]int{}, Unchanged: map[catalog.Kind]int{},
+	}}
 	// Prepared once on the pool, then bound to each batch's transaction with
 	// tx.StmtContext: SQLite parses each statement once per scan, not per row.
 	for _, s := range []struct {
@@ -121,60 +123,52 @@ type dirRef struct {
 	id   int64
 }
 
-// row is one entries row, minus root_id (the writer's) and id.
-type row struct {
-	parent sql.NullInt64 // invalid for the top dir
-	name   string
-	kind   string
-	size   sql.NullInt64
-	mtime  int64
-	target sql.NullString
-}
-
-func (w *scanWriter) AddDir(ctx context.Context, d catalog.DirRecord) error {
-	r := row{kind: "dir", mtime: d.ModTime.UnixNano()}
-	if d.Path != "." {
-		id, err := w.parentID(d.Path)
+func (w *scanWriter) Add(ctx context.Context, e catalog.Entry) error {
+	r := row{kind: e.Kind, mtime: e.ModTime.UnixNano()}
+	switch e.Kind {
+	case catalog.Dir:
+	case catalog.File:
+		r.size = sql.NullInt64{Int64: e.Size, Valid: true}
+	case catalog.Symlink:
+		r.target = sql.NullString{String: e.Target, Valid: true}
+	default:
+		return fmt.Errorf("%q: cannot record kind %q", e.Path, e.Kind)
+	}
+	if e.Path != "." {
+		dirID, err := w.parentID(e.Path)
 		if err != nil {
 			return err
 		}
-		r.parent, r.name = sql.NullInt64{Int64: id, Valid: true}, path.Base(d.Path)
+		r.parent, r.name = sql.NullInt64{Int64: dirID, Valid: true}, path.Base(e.Path)
 	}
+
 	id, written, err := w.upsert(ctx, r)
-	if err == nil && !written {
+	if err == nil && !written && e.Kind == catalog.Dir {
 		// The upsert returns no id when unchanged, but children need it.
 		err = w.tx.StmtContext(ctx, w.idStmt).QueryRowContext(ctx, w.rootID, r.parent, r.name).Scan(&id)
 	}
 	if err != nil {
-		return fmt.Errorf("dir %q: %w", d.Path, err)
+		return fmt.Errorf("%q: %w", e.Path, err)
 	}
-	count(written, &w.stats.DirsWritten, &w.stats.DirsUnchanged)
-	w.ancestors = append(w.ancestors, dirRef{d.Path, id})
+	if written {
+		w.stats.Written[e.Kind]++
+	} else {
+		w.stats.Unchanged[e.Kind]++
+	}
+	if e.Kind == catalog.Dir {
+		w.ancestors = append(w.ancestors, dirRef{e.Path, id})
+	}
 	return w.step()
 }
 
-func (w *scanWriter) AddFile(ctx context.Context, f catalog.FileRecord) error {
-	r := row{kind: "file", size: sql.NullInt64{Int64: f.Size, Valid: true}, mtime: f.ModTime.UnixNano()}
-	return w.addChild(ctx, f.Path, r, &w.stats.FilesWritten, &w.stats.FilesUnchanged)
-}
-
-func (w *scanWriter) AddLink(ctx context.Context, l catalog.LinkRecord) error {
-	r := row{kind: "link", mtime: l.ModTime.UnixNano(), target: sql.NullString{String: l.Target, Valid: true}}
-	return w.addChild(ctx, l.Path, r, &w.stats.LinksWritten, &w.stats.LinksUnchanged)
-}
-
-func (w *scanWriter) addChild(ctx context.Context, p string, r row, written, unchanged *int) error {
-	dirID, err := w.parentID(p)
-	if err != nil {
-		return err
-	}
-	r.parent, r.name = sql.NullInt64{Int64: dirID, Valid: true}, path.Base(p)
-	_, ok, err := w.upsert(ctx, r)
-	if err != nil {
-		return fmt.Errorf("%q: %w", p, err)
-	}
-	count(ok, written, unchanged)
-	return w.step()
+// row is one entries row, minus root_id (the writer's) and id.
+type row struct {
+	parent sql.NullInt64 // invalid for the top dir
+	name   string
+	kind   catalog.Kind
+	size   sql.NullInt64
+	mtime  int64
+	target sql.NullString
 }
 
 // upsert reports whether r was inserted or changed, and its id if so.
@@ -183,19 +177,11 @@ func (w *scanWriter) upsert(ctx context.Context, r row) (id int64, written bool,
 		return 0, false, err
 	}
 	err = w.tx.StmtContext(ctx, w.upsertStmt).QueryRowContext(ctx,
-		w.rootID, r.parent, r.name, r.kind, r.size, r.mtime, r.target).Scan(&id)
+		w.rootID, r.parent, r.name, string(r.kind), r.size, r.mtime, r.target).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, false, nil
 	}
 	return id, err == nil, err
-}
-
-func count(written bool, w, u *int) {
-	if written {
-		*w++
-	} else {
-		*u++
-	}
 }
 
 // parentID pops ancestors the walk has left, then returns the parent of p.

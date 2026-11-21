@@ -68,8 +68,7 @@ func runLs(ctx context.Context, args []string, stdout, stderr io.Writer) (err er
 	if *recursive {
 		return listTree(ctx, cat, dir, *page, stdout)
 	}
-	// Symlink sorts last, so this cursor skips every entry named -after.
-	cursor := catalog.Cursor{Name: *after, Kind: catalog.Symlink}
+	cursor := *after
 	for printed := 0; *limit == 0 || printed < *limit; {
 		n := *page
 		if *limit > 0 {
@@ -81,20 +80,20 @@ func runLs(ctx context.Context, args []string, stdout, stderr io.Writer) (err er
 			if err != nil {
 				return err
 			}
-			printCatalogEntry(stdout, e)
+			printEntry(stdout, e)
 			return nil
 		}
 		if err != nil {
 			return err
 		}
 		for _, e := range entries {
-			printCatalogEntry(stdout, e)
+			printEntry(stdout, e)
 		}
 		printed += len(entries)
 		if len(entries) < n {
 			break
 		}
-		cursor = entries[len(entries)-1].Cursor()
+		cursor = entries[len(entries)-1].Path
 	}
 	return nil
 }
@@ -109,11 +108,11 @@ func listTree(ctx context.Context, cat catalog.Catalog, dir string, page int, w 
 		return err
 	}
 	if top.Kind != catalog.Dir {
-		printCatalogEntry(w, top)
+		printEntry(w, top)
 		return nil
 	}
-	top.Name = "."
-	printCatalogEntry(w, top)
+	top.Path = "."
+	printEntry(w, top)
 
 	type frame struct {
 		rel     string // slash-separated, relative to dir
@@ -121,14 +120,14 @@ func listTree(ctx context.Context, cat catalog.Catalog, dir string, page int, w 
 		next    int  // index of the next entry to print
 		more    bool // the last page was full, so another may follow
 	}
-	fetch := func(f *frame, after catalog.Cursor) error {
+	fetch := func(f *frame, after string) error {
 		var err error
 		f.entries, err = cat.List(ctx, filepath.Join(dir, filepath.FromSlash(f.rel)), after, page)
 		f.next, f.more = 0, len(f.entries) == page
 		return err
 	}
 	stack := []*frame{{rel: "."}}
-	if err := fetch(stack[0], catalog.Cursor{}); err != nil {
+	if err := fetch(stack[0], ""); err != nil {
 		return err
 	}
 	for len(stack) > 0 {
@@ -138,35 +137,23 @@ func listTree(ctx context.Context, cat catalog.Catalog, dir string, page int, w 
 				stack = stack[:len(stack)-1]
 				continue
 			}
-			if err := fetch(f, f.entries[len(f.entries)-1].Cursor()); err != nil {
+			if err := fetch(f, f.entries[len(f.entries)-1].Path); err != nil {
 				return err
 			}
 			continue
 		}
 		e := f.entries[f.next]
 		f.next++
-		rel := path.Join(f.rel, e.Name)
-		e.Name = rel
-		printCatalogEntry(w, e)
+		rel := path.Join(f.rel, e.Path)
+		e.Path = rel
+		printEntry(w, e)
 		if e.Kind == catalog.Dir {
 			child := &frame{rel: rel}
-			if err := fetch(child, catalog.Cursor{}); err != nil {
+			if err := fetch(child, ""); err != nil {
 				return err
 			}
 			stack = append(stack, child)
 		}
 	}
 	return nil
-}
-
-// printCatalogEntry uses the columns of scan -dry-run: kind, size, mtime, name[ -> target].
-func printCatalogEntry(w io.Writer, e catalog.Entry) {
-	size, name := "-", quoteIfNeeded(e.Name)
-	switch e.Kind {
-	case catalog.File:
-		size = fmt.Sprint(e.Size)
-	case catalog.Symlink:
-		name += " -> " + quoteIfNeeded(e.Target)
-	}
-	fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", e.Kind, size, e.ModTime.UTC().Format(time.RFC3339), name)
 }

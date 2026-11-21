@@ -22,8 +22,11 @@ type Catalog interface {
 	// walk of it.
 	BeginScan(ctx context.Context, root string, opts ScanOptions) (ScanWriter, error)
 	Roots(ctx context.Context) ([]Root, error)
+	// Stat returns the entry at path. Its Path is its base name.
 	Stat(ctx context.Context, path string) (Entry, error)
-	List(ctx context.Context, path string, after Cursor, limit int) ([]Entry, error)
+	// List returns up to limit entries of the dir at path whose names sort
+	// after after, in byte order. Their Path is their name.
+	List(ctx context.Context, path string, after string, limit int) ([]Entry, error)
 	Close() error
 }
 
@@ -32,41 +35,24 @@ type Root struct {
 	Added time.Time
 }
 
-type Kind int
+// Kind values are stored as is, so they must never change.
+type Kind string
 
-// The values order a dir before a file of the same name
 const (
-	Dir Kind = iota
-	File
-	Symlink
+	Dir     Kind = "dir"
+	File    Kind = "file"
+	Symlink Kind = "link"
+	Other   Kind = "other" // fifos, sockets, devices: walked, never stored
 )
 
-func (k Kind) String() string {
-	switch k {
-	case Dir:
-		return "dir"
-	case File:
-		return "file"
-	case Symlink:
-		return "link"
-	}
-	return "unknown"
-}
-
+// Entry is one filesystem entry, as walked or as recorded.
 type Entry struct {
-	Name    string
+	Path    string // slash-separated, relative to the walked root or listed dir
 	Kind    Kind
 	Size    int64 // files only
 	ModTime time.Time
 	Target  string // links only, as stored in the link
 }
-
-type Cursor struct {
-	Name string
-	Kind Kind
-}
-
-func (e Entry) Cursor() Cursor { return Cursor{e.Name, e.Kind} }
 
 // Info describes the state of an opened catalog.
 type Info struct {
@@ -81,9 +67,9 @@ type ScanOptions struct {
 // ScanWriter records one walk. Entries must arrive parents first, as a
 // depth-first walk yields them, starting with the root dir ".".
 type ScanWriter interface {
-	AddDir(ctx context.Context, d DirRecord) error
-	AddFile(ctx context.Context, f FileRecord) error
-	AddLink(ctx context.Context, l LinkRecord) error
+	// Add records e, whose Path is relative to the scanned root. Other kinds
+	// are rejected.
+	Add(ctx context.Context, e Entry) error
 	// Finish commits the last batch and reports what was written. It must
 	// still commit after the walk's ctx was cancelled (Ctrl-C): callers pass
 	// a ctx that isn't, e.g. context.WithoutCancel(walkCtx).
@@ -93,29 +79,9 @@ type ScanWriter interface {
 	Abort()
 }
 
-// Paths are slash-separated and relative to the scanned root.
-type DirRecord struct {
-	Path    string
-	ModTime time.Time
-}
-
-type FileRecord struct {
-	Path    string
-	Size    int64
-	ModTime time.Time
-}
-
-type LinkRecord struct {
-	Path    string
-	Target  string // as stored in the link, never resolved
-	ModTime time.Time
-}
-
-// ScanStats counts rows inserted or changed (Written) and rows already
-// up to date (Unchanged), plus the number of committed transactions.
+// ScanStats counts, per kind, entries inserted or changed (Written) and
+// entries already up to date (Unchanged), plus the committed transactions.
 type ScanStats struct {
-	DirsWritten, DirsUnchanged   int
-	FilesWritten, FilesUnchanged int
-	LinksWritten, LinksUnchanged int
-	Batches                      int
+	Written, Unchanged map[Kind]int
+	Batches            int
 }

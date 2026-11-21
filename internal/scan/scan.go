@@ -9,39 +9,9 @@ import (
 	"iter"
 	"path"
 	"strings"
-	"time"
+
+	"github.com/sandlayth/uvsh/internal/catalog"
 )
-
-type Kind uint8
-
-const (
-	File Kind = iota + 1 // regular file
-	Dir
-	Symlink
-	Other
-)
-
-func (k Kind) String() string {
-	switch k {
-	case File:
-		return "file"
-	case Dir:
-		return "dir"
-	case Symlink:
-		return "link"
-	case Other:
-		return "other"
-	}
-	return fmt.Sprintf("Kind(%d)", k)
-}
-
-type Entry struct {
-	Path    string // slash-separated, relative to the walked root
-	Kind    Kind
-	Size    int64
-	ModTime time.Time
-	Target  string // symlink destination as stored in the link; empty otherwise
-}
 
 type Options struct {
 	// A pattern without '/' matches an entry's name at any depth
@@ -49,23 +19,23 @@ type Options struct {
 	Exclude []string
 }
 
-func Walk(ctx context.Context, fsys fs.FS, opts Options) iter.Seq2[Entry, error] {
-	return func(yield func(Entry, error) bool) {
+func Walk(ctx context.Context, fsys fs.FS, opts Options) iter.Seq2[catalog.Entry, error] {
+	return func(yield func(catalog.Entry, error) bool) {
 		for _, pat := range opts.Exclude {
 			if _, err := path.Match(pat, ""); err != nil {
-				yield(Entry{}, fmt.Errorf("exclude pattern %q: %w", pat, err))
+				yield(catalog.Entry{}, fmt.Errorf("exclude pattern %q: %w", pat, err))
 				return
 			}
 		}
 
 		fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
 			if err := ctx.Err(); err != nil {
-				yield(Entry{}, err)
+				yield(catalog.Entry{}, err)
 				return fs.SkipAll
 			}
 			if err != nil {
 				// WalkDir has already given up on this directory; carry on with the rest.
-				if !yield(Entry{Path: p}, err) {
+				if !yield(catalog.Entry{Path: p}, err) {
 					return fs.SkipAll
 				}
 				return nil
@@ -85,23 +55,22 @@ func Walk(ctx context.Context, fsys fs.FS, opts Options) iter.Seq2[Entry, error]
 	}
 }
 
-func entry(fsys fs.FS, p string, d fs.DirEntry) (Entry, error) {
+func entry(fsys fs.FS, p string, d fs.DirEntry) (catalog.Entry, error) {
 	info, err := d.Info() // lstat: describes a symlink itself, not its target
 	if err != nil {
-		return Entry{Path: p}, err
+		return catalog.Entry{Path: p}, err
 	}
-	e := Entry{Path: p, Size: info.Size(), ModTime: info.ModTime()}
+	e := catalog.Entry{Path: p, ModTime: info.ModTime()}
 	switch mode := info.Mode(); {
 	case mode.IsRegular():
-		e.Kind = File
+		e.Kind, e.Size = catalog.File, info.Size()
 	case mode.IsDir():
-		e.Kind = Dir
-		e.Size = 0
+		e.Kind = catalog.Dir
 	case mode&fs.ModeSymlink != 0:
-		e.Kind = Symlink
+		e.Kind = catalog.Symlink
 		e.Target, err = fs.ReadLink(fsys, p)
 	default:
-		e.Kind = Other
+		e.Kind = catalog.Other
 	}
 	return e, err
 }

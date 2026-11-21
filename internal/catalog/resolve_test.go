@@ -29,7 +29,7 @@ func newFake(roots map[string][]string) *fakeLookup {
 		if f.children[parent] == nil {
 			f.children[parent] = map[string]Node{}
 		}
-		f.children[parent][name] = Node{Entry: Entry{Name: name, Kind: kind}, ID: next}
+		f.children[parent][name] = Node{Entry: Entry{Path: name, Kind: kind}, ID: next}
 		return next
 	}
 	for root, entries := range roots {
@@ -83,19 +83,19 @@ func TestResolve(t *testing.T) {
 		{"/", "/", Dir, nil},
 		// The most specific root wins, with no fallback to /data.
 		{"/data/photos/only-here.jpg", "only-here.jpg", File, nil},
-		{"/data/photos/2023", "", 0, ErrNotFound},
-		{"/data/nope", "", 0, ErrNotFound},
-		{"/data/a.txt/below", "", 0, ErrNotFound},
-		{"/elsewhere/x", "", 0, ErrNotFound},
-		{"/data/boom", "", 0, errBoom},
+		{"/data/photos/2023", "", "", ErrNotFound},
+		{"/data/nope", "", "", ErrNotFound},
+		{"/data/a.txt/below", "", "", ErrNotFound},
+		{"/elsewhere/x", "", "", ErrNotFound},
+		{"/data/boom", "", "", errBoom},
 	} {
 		n, err := Resolve(t.Context(), l, tt.path)
 		if !errors.Is(err, tt.wantErr) {
 			t.Errorf("Resolve(%q) error = %v, want %v", tt.path, err, tt.wantErr)
 			continue
 		}
-		if err == nil && (n.Name != tt.wantName || n.Kind != tt.wantKind) {
-			t.Errorf("Resolve(%q) = %s %q, want %s %q", tt.path, n.Kind, n.Name, tt.wantKind, tt.wantName)
+		if err == nil && (n.Path != tt.wantName || n.Kind != tt.wantKind) {
+			t.Errorf("Resolve(%q) = %s %q, want %s %q", tt.path, n.Kind, n.Path, tt.wantKind, tt.wantName)
 		}
 	}
 

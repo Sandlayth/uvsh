@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -69,7 +68,7 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer, logge
 	}
 	defer root.Close()
 
-	handle := func(e scan.Entry) error {
+	handle := func(e catalog.Entry) error {
 		printEntry(stdout, e)
 		return nil
 	}
@@ -84,11 +83,16 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer, logge
 			return err
 		}
 		defer w.Abort()
-		handle = func(e scan.Entry) error { return record(ctx, w, e) }
+		handle = func(e catalog.Entry) error {
+			if e.Kind == catalog.Other {
+				return nil // walked and counted, never stored
+			}
+			return w.Add(ctx, e)
+		}
 	}
 
 	start := time.Now()
-	counts := map[scan.Kind]int{}
+	counts := map[catalog.Kind]int{}
 	var failed int
 	var interrupted error
 	for e, err := range scan.Walk(ctx, root.FS(), opts) {
@@ -108,10 +112,10 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer, logge
 	}
 
 	attrs := []any{
-		"dirs", counts[scan.Dir],
-		"files", counts[scan.File],
-		"symlinks", counts[scan.Symlink],
-		"other", counts[scan.Other],
+		"dirs", counts[catalog.Dir],
+		"files", counts[catalog.File],
+		"symlinks", counts[catalog.Symlink],
+		"other", counts[catalog.Other],
 		"errors", failed,
 	}
 	if w != nil {
@@ -121,14 +125,10 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer, logge
 		if err != nil {
 			return err
 		}
-		attrs = append(attrs,
-			"dirs_written", stats.DirsWritten,
-			"files_written", stats.FilesWritten,
-			"files_unchanged", stats.FilesUnchanged,
-			"links_written", stats.LinksWritten,
-			"links_unchanged", stats.LinksUnchanged,
-			"batches", stats.Batches,
-		)
+		for _, k := range []catalog.Kind{catalog.Dir, catalog.File, catalog.Symlink} {
+			attrs = append(attrs, string(k)+"s_written", stats.Written[k], string(k)+"s_unchanged", stats.Unchanged[k])
+		}
+		attrs = append(attrs, "batches", stats.Batches)
 	}
 	attrs = append(attrs, "elapsed", time.Since(start).Round(time.Millisecond))
 	if interrupted != nil {
@@ -141,39 +141,4 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer, logge
 		return fmt.Errorf("scan finished with %d errors", failed)
 	}
 	return nil
-}
-
-func record(ctx context.Context, w catalog.ScanWriter, e scan.Entry) error {
-	switch e.Kind {
-	case scan.Dir:
-		return w.AddDir(ctx, catalog.DirRecord{Path: e.Path, ModTime: e.ModTime})
-	case scan.File:
-		return w.AddFile(ctx, catalog.FileRecord{Path: e.Path, Size: e.Size, ModTime: e.ModTime})
-	case scan.Symlink:
-		return w.AddLink(ctx, catalog.LinkRecord{Path: e.Path, Target: e.Target, ModTime: e.ModTime})
-	}
-	return nil
-}
-
-// printEntry writes one tab-separated line: kind, size, mtime, path[, -> target].
-// Paths that aren't printable UTF-8 (newlines, invalid bytes) are Go-quoted so
-// every entry stays on exactly one line.
-func printEntry(w io.Writer, e scan.Entry) {
-	switch e.Kind {
-	case scan.File:
-		fmt.Fprintf(w, "%s\t%d\t%s\t%s\n", e.Kind, e.Size, e.ModTime.UTC().Format(time.RFC3339), quoteIfNeeded(e.Path))
-	case scan.Dir:
-		fmt.Fprintf(w, "%s\t-\t%s\t%s\n", e.Kind, e.ModTime.UTC().Format(time.RFC3339), quoteIfNeeded(e.Path))
-	case scan.Symlink:
-		fmt.Fprintf(w, "%s\t-\t%s\t%s -> %s\n", e.Kind, e.ModTime.UTC().Format(time.RFC3339), quoteIfNeeded(e.Path), quoteIfNeeded(e.Target))
-	default:
-		fmt.Fprintf(w, "%s\t-\t-\t%s\n", e.Kind, quoteIfNeeded(e.Path))
-	}
-}
-
-func quoteIfNeeded(s string) string {
-	if q := strconv.Quote(s); q[1:len(q)-1] != s {
-		return q
-	}
-	return s
 }

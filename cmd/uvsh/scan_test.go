@@ -89,10 +89,10 @@ func TestScanRecord(t *testing.T) {
 		return stderr.String()
 	}
 
-	if s := scanOnce(); !strings.Contains(s, "dirs_written=2 files_written=2 files_unchanged=0") {
+	if s := scanOnce(); !strings.Contains(s, "dirs_written=2 dirs_unchanged=0 files_written=2 files_unchanged=0") {
 		t.Errorf("first scan summary = %q", s)
 	}
-	if s := scanOnce(); !strings.Contains(s, "dirs_written=0 files_written=0 files_unchanged=2") {
+	if s := scanOnce(); !strings.Contains(s, "dirs_written=0 dirs_unchanged=2 files_written=0 files_unchanged=2") {
 		t.Errorf("rescan summary = %q", s)
 	}
 }

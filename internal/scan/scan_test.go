@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/sandlayth/uvsh/internal/catalog"
 )
 
 var stamp = time.Date(2023, 1, 15, 12, 30, 0, 0, time.UTC)
@@ -69,13 +71,13 @@ func must(t *testing.T, err error) {
 }
 
 // walkAll opens dir as an os.Root, like the CLI does, and collects everything.
-func walkAll(t *testing.T, dir string, opts Options) (map[string]Entry, []error) {
+func walkAll(t *testing.T, dir string, opts Options) (map[string]catalog.Entry, []error) {
 	t.Helper()
 	root, err := os.OpenRoot(dir)
 	must(t, err)
 	t.Cleanup(func() { root.Close() })
 
-	entries := map[string]Entry{}
+	entries := map[string]catalog.Entry{}
 	var errs []error
 	for e, err := range Walk(t.Context(), root.FS(), opts) {
 		if err != nil {
@@ -93,24 +95,24 @@ func TestWalkReportsEveryKind(t *testing.T) {
 		t.Fatalf("unexpected errors: %v", errs)
 	}
 
-	want := map[string]Entry{
-		".":                {Kind: Dir},
-		"dir":              {Kind: Dir},
-		"dir/.cache":       {Kind: Dir},
-		"#trash":           {Kind: Dir},
-		"links":            {Kind: Dir},
-		"a.txt":            {Kind: File, Size: 3, ModTime: stamp},
-		"dir/b.txt":        {Kind: File, Size: 5, ModTime: stamp},
-		"dir/.cache/c.txt": {Kind: File, Size: 1, ModTime: stamp},
-		"#trash/d.txt":     {Kind: File, Size: 1, ModTime: stamp},
-		"x.tmp":            {Kind: File, Size: 1, ModTime: stamp},
-		"links/to-file":    {Kind: Symlink, Target: "../a.txt"},
-		"links/to-dir":     {Kind: Symlink, Target: "../dir"},
-		"links/to-outside": {Kind: Symlink, Target: "../../outside/secret.txt"},
-		"links/dangling":   {Kind: Symlink, Target: "../nope.txt"},
-		"links/loop-a":     {Kind: Symlink, Target: "loop-b"},
-		"links/loop-b":     {Kind: Symlink, Target: "loop-a"},
-		"fifo":             {Kind: Other},
+	want := map[string]catalog.Entry{
+		".":                {Kind: catalog.Dir},
+		"dir":              {Kind: catalog.Dir},
+		"dir/.cache":       {Kind: catalog.Dir},
+		"#trash":           {Kind: catalog.Dir},
+		"links":            {Kind: catalog.Dir},
+		"a.txt":            {Kind: catalog.File, Size: 3, ModTime: stamp},
+		"dir/b.txt":        {Kind: catalog.File, Size: 5, ModTime: stamp},
+		"dir/.cache/c.txt": {Kind: catalog.File, Size: 1, ModTime: stamp},
+		"#trash/d.txt":     {Kind: catalog.File, Size: 1, ModTime: stamp},
+		"x.tmp":            {Kind: catalog.File, Size: 1, ModTime: stamp},
+		"links/to-file":    {Kind: catalog.Symlink, Target: "../a.txt"},
+		"links/to-dir":     {Kind: catalog.Symlink, Target: "../dir"},
+		"links/to-outside": {Kind: catalog.Symlink, Target: "../../outside/secret.txt"},
+		"links/dangling":   {Kind: catalog.Symlink, Target: "../nope.txt"},
+		"links/loop-a":     {Kind: catalog.Symlink, Target: "loop-b"},
+		"links/loop-b":     {Kind: catalog.Symlink, Target: "loop-a"},
+		"fifo":             {Kind: catalog.Other},
 	}
 	if len(entries) != len(want) {
 		t.Errorf("got %d entries, want %d: %v", len(entries), len(want), keys(entries))
@@ -124,7 +126,7 @@ func TestWalkReportsEveryKind(t *testing.T) {
 		if got.Kind != w.Kind || got.Target != w.Target {
 			t.Errorf("%s: kind=%v target=%q, want kind=%v target=%q", p, got.Kind, got.Target, w.Kind, w.Target)
 		}
-		if w.Kind == File && (got.Size != w.Size || !got.ModTime.Equal(w.ModTime)) {
+		if w.Kind == catalog.File && (got.Size != w.Size || !got.ModTime.Equal(w.ModTime)) {
 			t.Errorf("%s: size=%d mtime=%v, want size=%d mtime=%v", p, got.Size, got.ModTime, w.Size, w.ModTime)
 		}
 	}
@@ -211,7 +213,7 @@ func TestWalkStopsOnCancel(t *testing.T) {
 	}
 }
 
-func keys(m map[string]Entry) []string {
+func keys(m map[string]catalog.Entry) []string {
 	ks := make([]string, 0, len(m))
 	for k := range m {
 		ks = append(ks, k)

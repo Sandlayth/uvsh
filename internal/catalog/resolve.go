@@ -48,7 +48,7 @@ func Resolve(ctx context.Context, l Lookup, path string) (Node, error) {
 		}
 		root = parent
 	}
-	n.Name = filepath.Base(root)
+	n.Path = filepath.Base(root)
 
 	rel := strings.TrimPrefix(strings.TrimPrefix(path, root), string(filepath.Separator))
 	if rel == "" {

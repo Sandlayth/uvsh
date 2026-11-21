@@ -46,7 +46,7 @@ func (c *Catalog) Stat(ctx context.Context, path string) (catalog.Entry, error) 
 	return n.Entry, err
 }
 
-func (c *Catalog) List(ctx context.Context, path string, after catalog.Cursor, limit int) ([]catalog.Entry, error) {
+func (c *Catalog) List(ctx context.Context, path string, after string, limit int) ([]catalog.Entry, error) {
 	if limit < 1 {
 		return nil, fmt.Errorf("limit %d: must be at least 1", limit)
 	}
@@ -64,7 +64,7 @@ func (c *Catalog) List(ctx context.Context, path string, after catalog.Cursor, l
 		return nil, fmt.Errorf("%s: %w", path, catalog.ErrNotDir)
 	}
 
-	rows, err := tx.QueryContext(ctx, sqlList, sql.Named("dir", dir.ID), sql.Named("name", after.Name), sql.Named("n", limit))
+	rows, err := tx.QueryContext(ctx, sqlList, sql.Named("dir", dir.ID), sql.Named("name", after), sql.Named("n", limit))
 	if err != nil {
 		return nil, err
 	}
@@ -93,21 +93,19 @@ func (l txLookup) Child(ctx context.Context, dir catalog.Node, name string) (cat
 		WHERE parent_id = ? AND name = ?`, dir.ID, name)))
 }
 
-var kinds = map[string]catalog.Kind{"dir": catalog.Dir, "file": catalog.File, "link": catalog.Symlink}
-
 // scanNode reads entryCols from a *sql.Row or *sql.Rows.
 func scanNode(r interface{ Scan(...any) error }) (catalog.Node, error) {
 	var n catalog.Node
-	var kind string
 	var mtime int64
-	if err := r.Scan(&n.ID, &n.Name, &kind, &n.Size, &mtime, &n.Target); err != nil {
+	if err := r.Scan(&n.ID, &n.Path, &n.Kind, &n.Size, &mtime, &n.Target); err != nil {
 		return catalog.Node{}, err
 	}
-	k, ok := kinds[kind]
-	if !ok {
-		return catalog.Node{}, fmt.Errorf("entry %d: unknown kind %q", n.ID, kind)
+	switch n.Kind {
+	case catalog.Dir, catalog.File, catalog.Symlink:
+	default:
+		return catalog.Node{}, fmt.Errorf("entry %d: unknown kind %q", n.ID, n.Kind)
 	}
-	n.Kind, n.ModTime = k, time.Unix(0, mtime)
+	n.ModTime = time.Unix(0, mtime)
 	return n, nil
 }
 

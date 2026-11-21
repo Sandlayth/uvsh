@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -76,14 +77,13 @@ func record(t *testing.T, c catalog.Catalog, root string, batch int, entries tre
 	}
 	defer w.Abort()
 	for _, e := range entries {
+		entry := catalog.Entry{Path: e.path, Kind: catalog.File, Size: e.size, ModTime: e.mod}
 		if name, target, ok := strings.Cut(e.path, " -> "); ok {
-			err = w.AddLink(ctx, catalog.LinkRecord{Path: name, Target: target, ModTime: e.mod})
+			entry = catalog.Entry{Path: name, Kind: catalog.Symlink, Target: target, ModTime: e.mod}
 		} else if n := len(e.path); e.path[n-1] == '/' {
-			err = w.AddDir(ctx, catalog.DirRecord{Path: e.path[:n-1], ModTime: e.mod})
-		} else {
-			err = w.AddFile(ctx, catalog.FileRecord{Path: e.path, Size: e.size, ModTime: e.mod})
+			entry = catalog.Entry{Path: e.path[:n-1], Kind: catalog.Dir, ModTime: e.mod}
 		}
-		if err != nil {
+		if err := w.Add(ctx, entry); err != nil {
 			t.Fatalf("add %s: %v", e.path, err)
 		}
 	}
@@ -98,14 +98,14 @@ func record(t *testing.T, c catalog.Catalog, root string, batch int, entries tre
 func listAll(t *testing.T, c catalog.Catalog, dir string, page int) []string {
 	t.Helper()
 	var got []string
-	var after catalog.Cursor
+	var after string
 	for {
 		entries, err := c.List(t.Context(), dir, after, page)
 		if err != nil {
 			t.Fatalf("List(%s, page %d): %v", dir, page, err)
 		}
 		for _, e := range entries {
-			s := e.Kind.String() + " " + e.Name
+			s := string(e.Kind) + " " + e.Path
 			if e.Kind == catalog.Symlink {
 				s += " -> " + e.Target
 			}
@@ -114,8 +114,12 @@ func listAll(t *testing.T, c catalog.Catalog, dir string, page int) []string {
 		if len(entries) < page {
 			return got
 		}
-		after = entries[len(entries)-1].Cursor()
+		after = entries[len(entries)-1].Path
 	}
+}
+
+func sameStats(a, b catalog.ScanStats) bool {
+	return maps.Equal(a.Written, b.Written) && maps.Equal(a.Unchanged, b.Unchanged) && a.Batches == b.Batches
 }
 
 func stat(t *testing.T, c catalog.Catalog, path string) catalog.Entry {
@@ -144,8 +148,8 @@ func testScanWritesTree(t *testing.T, open Opener) {
 	c := open(t)
 	stats := record(t, c, "/data", 1000, sample)
 
-	want := catalog.ScanStats{DirsWritten: 3, FilesWritten: 4, Batches: 1}
-	if stats != want {
+	want := catalog.ScanStats{Written: map[catalog.Kind]int{catalog.Dir: 3, catalog.File: 4}, Batches: 1}
+	if !sameStats(stats, want) {
 		t.Errorf("stats = %+v, want %+v", stats, want)
 	}
 	if e := stat(t, c, "/data/photos/2023/img.jpg"); e.Kind != catalog.File || e.Size != 100 || !e.ModTime.Equal(t0) {
@@ -176,8 +180,8 @@ func testRescan(t *testing.T, open Opener) {
 	record(t, c, "/data", 2, sample)
 
 	t.Run("unchanged writes nothing", func(t *testing.T) {
-		want := catalog.ScanStats{DirsUnchanged: 3, FilesUnchanged: 4, Batches: 4}
-		if got := record(t, c, "/data", 2, sample); got != want {
+		want := catalog.ScanStats{Unchanged: map[catalog.Kind]int{catalog.Dir: 3, catalog.File: 4}, Batches: 4}
+		if got := record(t, c, "/data", 2, sample); !sameStats(got, want) {
 			t.Errorf("stats = %+v, want %+v", got, want)
 		}
 	})
@@ -188,7 +192,7 @@ func testRescan(t *testing.T, open Opener) {
 		changed[2].mod = t0.Add(time.Second) // photos/ got a new entry
 		changed[5].mod = t0.Add(time.Hour)   // photos/z.txt touched
 		stats := record(t, c, "/data", 1000, changed)
-		if stats.FilesWritten != 2 || stats.DirsWritten != 1 {
+		if stats.Written[catalog.File] != 2 || stats.Written[catalog.Dir] != 1 {
 			t.Errorf("stats = %+v, want 2 files and 1 dir written", stats)
 		}
 		if got := stat(t, c, "/data/a.txt").Size; got != 4 {
@@ -224,10 +228,10 @@ func testScanAbortDiscardsOpenBatch(t *testing.T, open Opener) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := w.AddDir(ctx, catalog.DirRecord{Path: ".", ModTime: t0}); err != nil {
+	if err := w.Add(ctx, catalog.Entry{Path: ".", Kind: catalog.Dir, ModTime: t0}); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.AddFile(ctx, catalog.FileRecord{Path: "a", Size: 1, ModTime: t0}); err != nil {
+	if err := w.Add(ctx, catalog.Entry{Path: "a", Kind: catalog.File, Size: 1, ModTime: t0}); err != nil {
 		t.Fatal(err)
 	}
 	w.Abort()
@@ -250,10 +254,10 @@ func testScanFinishAfterCancel(t *testing.T, open Opener) {
 		t.Fatal(err)
 	}
 	defer w.Abort()
-	if err := w.AddDir(ctx, catalog.DirRecord{Path: ".", ModTime: t0}); err != nil {
+	if err := w.Add(ctx, catalog.Entry{Path: ".", Kind: catalog.Dir, ModTime: t0}); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.AddFile(ctx, catalog.FileRecord{Path: "a", Size: 1, ModTime: t0}); err != nil {
+	if err := w.Add(ctx, catalog.Entry{Path: "a", Kind: catalog.File, Size: 1, ModTime: t0}); err != nil {
 		t.Fatal(err)
 	}
 	cancel()
@@ -287,8 +291,14 @@ func testScanRejects(t *testing.T, open Opener) {
 		t.Fatal(err)
 	}
 	defer w.Abort()
-	if err := w.AddFile(ctx, catalog.FileRecord{Path: "orphan/f", ModTime: t0}); err == nil {
-		t.Error("AddFile without its parent dir succeeded")
+	if err := w.Add(ctx, catalog.Entry{Path: "orphan/f", Kind: catalog.File, ModTime: t0}); err == nil {
+		t.Error("Add without its parent dir succeeded")
+	}
+	if err := w.Add(ctx, catalog.Entry{Path: ".", Kind: catalog.Dir, ModTime: t0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Add(ctx, catalog.Entry{Path: "fifo", Kind: catalog.Other, ModTime: t0}); err == nil {
+		t.Error("Add of an Other entry succeeded")
 	}
 }
 
@@ -302,16 +312,16 @@ func testScanLinks(t *testing.T, open Opener) {
 		{"sub/", 0, t0},
 		{"sub/up -> ../a.txt", 0, t0},
 	}
-	if got := record(t, c, "/data", 1000, links); got.LinksWritten != 3 || got.LinksUnchanged != 0 {
+	if got := record(t, c, "/data", 1000, links); got.Written[catalog.Symlink] != 3 || got.Unchanged[catalog.Symlink] != 0 {
 		t.Errorf("first scan: stats = %+v, want 3 links written", got)
 	}
-	if got := record(t, c, "/data", 1000, links); got.LinksWritten != 0 || got.LinksUnchanged != 3 {
+	if got := record(t, c, "/data", 1000, links); got.Written[catalog.Symlink] != 0 || got.Unchanged[catalog.Symlink] != 3 {
 		t.Errorf("rescan: stats = %+v, want 3 links unchanged", got)
 	}
 	changed := append(tree(nil), links...)
 	changed[2].path = "dangling -> a.txt" // retargeted
 	changed[3].mod = t0.Add(time.Second)  // recreated, same target
-	if got := record(t, c, "/data", 1000, changed); got.LinksWritten != 2 || got.LinksUnchanged != 1 {
+	if got := record(t, c, "/data", 1000, changed); got.Written[catalog.Symlink] != 2 || got.Unchanged[catalog.Symlink] != 1 {
 		t.Errorf("changed: stats = %+v, want 2 links written, 1 unchanged", got)
 	}
 }
@@ -397,7 +407,7 @@ func testScanKindChange(t *testing.T, open Opener) {
 	c := open(t)
 	record(t, c, "/data", 1000, tree{{"./", 0, t0}, {"a", 1, t0}, {"b/", 0, t0}, {"c", 1, t0}})
 	stats := record(t, c, "/data", 1000, tree{{"./", 0, t0}, {"a/", 0, t0}, {"b", 7, t0}, {"c -> a", 0, t0}})
-	if stats.DirsWritten != 1 || stats.FilesWritten != 1 || stats.LinksWritten != 1 {
+	if want := map[catalog.Kind]int{catalog.Dir: 1, catalog.File: 1, catalog.Symlink: 1}; !maps.Equal(stats.Written, want) {
 		t.Errorf("stats = %+v, want 1 dir, 1 file and 1 link written", stats)
 	}
 	want := []string{"dir a", "file b", "link c -> a"}
@@ -416,16 +426,16 @@ func testListInsertBeforeCursor(t *testing.T, open Opener) {
 	first := tree{{"./", 0, t0}, {"b", 1, t0}, {"c", 1, t0}, {"d", 1, t0}}
 	record(t, c, "/data", 1000, first)
 
-	page1, err := c.List(t.Context(), "/data", catalog.Cursor{}, 2)
+	page1, err := c.List(t.Context(), "/data", "", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	record(t, c, "/data", 1000, append(first, tree{{"a", 1, t0}}...))
-	page2, err := c.List(t.Context(), "/data", page1[len(page1)-1].Cursor(), 2)
+	page2, err := c.List(t.Context(), "/data", page1[len(page1)-1].Path, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(page2) != 1 || page2[0].Name != "d" {
+	if len(page2) != 1 || page2[0].Path != "d" {
 		t.Errorf("page 2 = %+v, want just d", page2)
 	}
 }
@@ -435,16 +445,16 @@ func testListRejects(t *testing.T, open Opener) {
 	record(t, c, "/data", 1000, sample)
 	ctx := t.Context()
 
-	if _, err := c.List(ctx, "/data/a.txt", catalog.Cursor{}, 10); !errors.Is(err, catalog.ErrNotDir) {
+	if _, err := c.List(ctx, "/data/a.txt", "", 10); !errors.Is(err, catalog.ErrNotDir) {
 		t.Errorf("List(file) error = %v, want ErrNotDir", err)
 	}
-	if _, err := c.List(ctx, "/data/nope", catalog.Cursor{}, 10); !errors.Is(err, catalog.ErrNotFound) {
+	if _, err := c.List(ctx, "/data/nope", "", 10); !errors.Is(err, catalog.ErrNotFound) {
 		t.Errorf("List(missing) error = %v, want ErrNotFound", err)
 	}
-	if _, err := c.List(ctx, "data", catalog.Cursor{}, 10); err == nil {
+	if _, err := c.List(ctx, "data", "", 10); err == nil {
 		t.Error("List(relative path) succeeded")
 	}
-	if _, err := c.List(ctx, "/data", catalog.Cursor{}, 0); err == nil {
+	if _, err := c.List(ctx, "/data", "", 0); err == nil {
 		t.Error("List(limit 0) succeeded")
 	}
 }
@@ -459,13 +469,13 @@ func testStat(t *testing.T, open Opener) {
 		want catalog.Entry
 		err  error
 	}{
-		{"/data", catalog.Entry{Name: "data", Kind: catalog.Dir, ModTime: t0}, nil},
-		{"/data/", catalog.Entry{Name: "data", Kind: catalog.Dir, ModTime: t0}, nil},
-		{"/data/x/../photos", catalog.Entry{Name: "photos", Kind: catalog.Dir, ModTime: t0}, nil},
-		{"/data/photos/2023", catalog.Entry{Name: "2023", Kind: catalog.Dir, ModTime: t0}, nil},
-		{"/data/a.txt", catalog.Entry{Name: "a.txt", Kind: catalog.File, Size: 3, ModTime: t0}, nil},
-		{"/srv/media/top", catalog.Entry{Name: "top", Kind: catalog.File, Size: 9, ModTime: t0}, nil},
-		{"/srv/media/film", catalog.Entry{Name: "film", Kind: catalog.Symlink, Target: "/data/photos", ModTime: t0}, nil},
+		{"/data", catalog.Entry{Path: "data", Kind: catalog.Dir, ModTime: t0}, nil},
+		{"/data/", catalog.Entry{Path: "data", Kind: catalog.Dir, ModTime: t0}, nil},
+		{"/data/x/../photos", catalog.Entry{Path: "photos", Kind: catalog.Dir, ModTime: t0}, nil},
+		{"/data/photos/2023", catalog.Entry{Path: "2023", Kind: catalog.Dir, ModTime: t0}, nil},
+		{"/data/a.txt", catalog.Entry{Path: "a.txt", Kind: catalog.File, Size: 3, ModTime: t0}, nil},
+		{"/srv/media/top", catalog.Entry{Path: "top", Kind: catalog.File, Size: 9, ModTime: t0}, nil},
+		{"/srv/media/film", catalog.Entry{Path: "film", Kind: catalog.Symlink, Target: "/data/photos", ModTime: t0}, nil},
 		{"/srv/media/film/2023", catalog.Entry{}, catalog.ErrNotFound}, // links are never followed
 		{"/srv", catalog.Entry{}, catalog.ErrNotFound},                 // above a root
 		{"/data/nope", catalog.Entry{}, catalog.ErrNotFound},
