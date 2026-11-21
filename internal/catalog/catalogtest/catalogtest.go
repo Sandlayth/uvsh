@@ -37,6 +37,9 @@ func Run(t *testing.T, open Opener) {
 		{"ScanRejects", testScanRejects},
 		{"ScanLinks", testScanLinks},
 		{"ScanKindChange", testScanKindChange},
+		{"Missing", testMissing},
+		{"MissingNeedsCompleteScan", testMissingNeedsCompleteScan},
+		{"SkipKeepsWhatWasRecorded", testSkipKeepsWhatWasRecorded},
 		{"ScanRootOverlap", testScanRootOverlap},
 		{"ScanRootOverlapConcurrent", testScanRootOverlapConcurrent},
 		{"ListPages", testListPages},
@@ -89,7 +92,7 @@ func record(t *testing.T, c catalog.Catalog, root string, batch int, entries tre
 			t.Fatalf("add %s: %v", e.path, err)
 		}
 	}
-	stats, err := w.Finish(ctx)
+	stats, err := w.Finish(ctx, true)
 	if err != nil {
 		t.Fatalf("Finish: %v", err)
 	}
@@ -249,9 +252,10 @@ func testScanAbortDiscardsOpenBatch(t *testing.T, open Opener) {
 	if _, err := c.Stat(ctx, "/data/a"); !errors.Is(err, catalog.ErrNotFound) {
 		t.Errorf("Stat after Abort: error = %v, want ErrNotFound", err)
 	}
-	if _, err := w.Finish(ctx); err == nil {
+	if _, err := w.Finish(ctx, true); err == nil {
 		t.Error("Finish after Abort succeeded")
 	}
+	record(t, c, "/data", 1000, sample) // Abort ended the scan: the next one can begin
 }
 
 // Ctrl-C cancels the walk's ctx; what was walked must still be committable.
@@ -271,7 +275,7 @@ func testScanFinishAfterCancel(t *testing.T, open Opener) {
 	}
 	cancel()
 
-	if _, err := w.Finish(context.WithoutCancel(ctx)); err != nil {
+	if _, err := w.Finish(context.WithoutCancel(ctx), false); err != nil {
 		t.Fatalf("Finish after cancel: %v", err)
 	}
 	stat(t, c, "/data/a")
@@ -414,10 +418,10 @@ func testListPages(t *testing.T, open Opener) {
 // it, the entry becomes that kind.
 func testScanKindChange(t *testing.T, open Opener) {
 	c := open(t)
-	record(t, c, "/data", 1000, tree{{"./", 0, t0}, {"a", 1, t0}, {"b/", 0, t0}, {"c", 1, t0}})
+	record(t, c, "/data", 1000, tree{{"./", 0, t0}, {"a", 1, t0}, {"b/", 0, t0}, {"b/in", 1, t0}, {"c", 1, t0}})
 	stats := record(t, c, "/data", 1000, tree{{"./", 0, t0}, {"a/", 0, t0}, {"b", 7, t0}, {"c -> a", 0, t0}})
-	if want := map[uvsh.Kind]int{uvsh.Dir: 1, uvsh.File: 1, uvsh.Symlink: 1}; !maps.Equal(stats.Written, want) {
-		t.Errorf("stats = %+v, want 1 dir, 1 file and 1 link written", stats)
+	if want := map[uvsh.Kind]int{uvsh.Dir: 1, uvsh.File: 1, uvsh.Symlink: 1}; !maps.Equal(stats.Written, want) || stats.Missing != 1 {
+		t.Errorf("stats = %+v, want 1 dir, 1 file and 1 link written, b/in missing", stats)
 	}
 	want := []string{"dir a", "file b", "link c -> a"}
 	if got := listAll(t, c, "/data", 10); !slices.Equal(got, want) {
@@ -504,6 +508,94 @@ func testStat(t *testing.T, open Opener) {
 			t.Errorf("Stat(%q) = %+v, want %+v", tt.path, got, tt.want)
 		}
 	}
+}
+
+// Entries a complete scan doesn't see are hidden, not deleted, and come back
+// when a later scan sees them again.
+func testMissing(t *testing.T, open Opener) {
+	c := open(t)
+	record(t, c, "/data", 1000, sample)
+	var smaller tree
+	for _, e := range sample {
+		if !strings.HasPrefix(e.path, "photos/2023/") && e.path != "zz.txt" {
+			smaller = append(smaller, e)
+		}
+	}
+	if got := record(t, c, "/data", 1000, smaller); got.Missing != 3 {
+		t.Errorf("first scan without them: Missing = %d, want 3 (2023/, img.jpg, zz.txt)", got.Missing)
+	}
+	for _, p := range []string{"/data/zz.txt", "/data/photos/2023", "/data/photos/2023/img.jpg"} {
+		if _, err := c.Stat(t.Context(), p); !errors.Is(err, catalog.ErrNotFound) {
+			t.Errorf("Stat(%s) error = %v, want ErrNotFound", p, err)
+		}
+	}
+	if got, want := listAll(t, c, "/data/photos", 10), []string{"file z.txt"}; !slices.Equal(got, want) {
+		t.Errorf("photos = %q, want %q", got, want)
+	}
+	if got := record(t, c, "/data", 1000, smaller); got.Missing != 0 {
+		t.Errorf("second scan without them: Missing = %d, want 0 (already missing)", got.Missing)
+	}
+
+	// Back exactly as they were: still written, to clear the mark.
+	got := record(t, c, "/data", 1000, sample)
+	if want := map[uvsh.Kind]int{uvsh.Dir: 1, uvsh.File: 2}; !maps.Equal(got.Written, want) || got.Missing != 0 {
+		t.Errorf("scan with them back: stats = %+v, want 2023/, img.jpg and zz.txt written", got)
+	}
+	stat(t, c, "/data/photos/2023/img.jpg")
+}
+
+// Not seeing an entry means nothing unless the whole tree was walked.
+func testMissingNeedsCompleteScan(t *testing.T, open Opener) {
+	c := open(t)
+	record(t, c, "/data", 1000, sample)
+	ctx := t.Context()
+	w, err := c.BeginScan(ctx, "/data", catalog.ScanOptions{BatchSize: 1000})
+	must(t, err)
+	defer w.Abort()
+	must(t, w.Add(ctx, uvsh.Entry{Path: ".", Kind: uvsh.Dir, ModTime: t0}))
+	stats, err := w.Finish(ctx, false)
+	must(t, err)
+	if stats.Missing != 0 {
+		t.Errorf("Missing = %d after an incomplete scan, want 0", stats.Missing)
+	}
+	stat(t, c, "/data/zz.txt")
+}
+
+// An entry that couldn't be read keeps what the catalog holds at and below it.
+func testSkipKeepsWhatWasRecorded(t *testing.T, open Opener) {
+	c := open(t)
+	record(t, c, "/data", 1000, sample)
+	ctx := t.Context()
+	scanWith := func(add func(w catalog.ScanWriter)) catalog.ScanStats {
+		t.Helper()
+		w, err := c.BeginScan(ctx, "/data", catalog.ScanOptions{BatchSize: 1000})
+		must(t, err)
+		defer w.Abort()
+		must(t, w.Add(ctx, uvsh.Entry{Path: ".", Kind: uvsh.Dir, ModTime: t0}))
+		add(w)
+		stats, err := w.Finish(ctx, true)
+		must(t, err)
+		return stats
+	}
+
+	// photos/ was listed but couldn't be read; zz.txt couldn't be stat'ed.
+	stats := scanWith(func(w catalog.ScanWriter) {
+		must(t, w.Add(ctx, uvsh.Entry{Path: "a.txt", Kind: uvsh.File, Size: 3, ModTime: t0}))
+		must(t, w.Add(ctx, uvsh.Entry{Path: "photos", Kind: uvsh.Dir, ModTime: t0}))
+		must(t, w.Skip(ctx, "photos"))
+		must(t, w.Skip(ctx, "zz.txt"))
+	})
+	if stats.Missing != 0 {
+		t.Errorf("Missing = %d, want 0", stats.Missing)
+	}
+	stat(t, c, "/data/photos/2023/img.jpg")
+	stat(t, c, "/data/zz.txt")
+
+	// The root itself couldn't be read: everything is kept.
+	if stats := scanWith(func(w catalog.ScanWriter) { must(t, w.Skip(ctx, ".")) }); stats.Missing != 0 {
+		t.Errorf("unreadable root: Missing = %d, want 0", stats.Missing)
+	}
+	stat(t, c, "/data/a.txt")
 }
 
 // Lookups inside one Read don't see a scan that commits while it runs.

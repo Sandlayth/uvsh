@@ -16,15 +16,34 @@ import (
 const (
 	// No conflict target: it catches both (parent_id, name) and a root's one
 	// top dir. The WHERE makes an unchanged entry a no-op (no page rewrite, no
-	// WAL growth) that returns no row; IS NOT compares NULLs as values.
+	// WAL growth) that returns no row; IS NOT compares NULLs as values. An
+	// entry back from missing is always written, to clear missing_since.
 	sqlUpsert = `INSERT INTO entries (root_id, parent_id, name, kind, size, mtime_ns, target)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT DO UPDATE SET kind = excluded.kind, size = excluded.size,
-			mtime_ns = excluded.mtime_ns, target = excluded.target
+			mtime_ns = excluded.mtime_ns, target = excluded.target, missing_since = NULL
 		WHERE entries.kind != excluded.kind OR entries.size IS NOT excluded.size
 			OR entries.mtime_ns != excluded.mtime_ns OR entries.target IS NOT excluded.target
+			OR entries.missing_since IS NOT NULL
 		RETURNING id`
 	sqlEntryID = `SELECT id FROM entries WHERE root_id = ? AND parent_id IS ? AND name = ?`
+
+	// The seen table lives in the scan's connection, outside the WAL; %s is
+	// its name. A root's top dir is never missing, so it isn't tracked.
+	sqlSeenCreate = `CREATE TEMP TABLE %s (parent_id INTEGER NOT NULL, name TEXT NOT NULL,
+		PRIMARY KEY (parent_id, name)) WITHOUT ROWID`
+	sqlSeenAdd = `INSERT OR IGNORE INTO %s (parent_id, name) VALUES (?, ?)`
+	// Skip keeps an entry and everything below it.
+	sqlSeenSubtree = `INSERT OR IGNORE INTO %s (parent_id, name)
+		WITH RECURSIVE sub(id, parent_id, name) AS (
+			SELECT id, parent_id, name FROM entries WHERE parent_id = ? AND name = ?
+			UNION ALL
+			SELECT e.id, e.parent_id, e.name FROM entries e JOIN sub ON e.parent_id = sub.id)
+		SELECT parent_id, name FROM sub`
+	sqlSeenAll     = `INSERT OR IGNORE INTO %s (parent_id, name) SELECT parent_id, name FROM entries WHERE root_id = ? AND parent_id IS NOT NULL`
+	sqlMarkMissing = `UPDATE entries SET missing_since = ?
+		WHERE root_id = ? AND parent_id IS NOT NULL AND missing_since IS NULL
+			AND NOT EXISTS (SELECT 1 FROM %s s WHERE s.parent_id = entries.parent_id AND s.name = entries.name)`
 )
 
 func (c *Catalog) BeginScan(ctx context.Context, root string, opts catalog.ScanOptions) (catalog.ScanWriter, error) {
@@ -39,19 +58,25 @@ func (c *Catalog) BeginScan(ctx context.Context, root string, opts catalog.ScanO
 		return nil, fmt.Errorf("register root %s: %w", root, err)
 	}
 
-	w := &scanWriter{db: c.writer, rootID: rootID, batchSize: opts.BatchSize, stats: catalog.ScanStats{
+	// The seen table is per connection, so the scan keeps the writer's one
+	// connection until it ends; the pool could otherwise close it when idle
+	// and lose the table. Other writes wait meanwhile.
+	conn, err := c.writer.Conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	w := &scanWriter{conn: conn, rootID: rootID, batchSize: opts.BatchSize, stats: catalog.ScanStats{
 		Written: map[uvsh.Kind]int{}, Unchanged: map[uvsh.Kind]int{},
 	}}
-	// Prepared once on the pool, then bound to each batch's transaction with
-	// tx.StmtContext: SQLite parses each statement once per scan, not per row.
-	for _, s := range []struct {
-		stmt **sql.Stmt
-		sql  string
-	}{{&w.upsertStmt, sqlUpsert}, {&w.idStmt, sqlEntryID}} {
-		if *s.stmt, err = c.writer.PrepareContext(ctx, s.sql); err != nil {
-			w.closeStmts()
-			return nil, err
-		}
+	err = conn.QueryRowContext(ctx, `INSERT INTO scans (root_id, started_ns) VALUES (?, ?) RETURNING id`,
+		rootID, time.Now().UnixNano()).Scan(&w.scanID)
+	if err == nil {
+		w.seen = fmt.Sprintf("temp.seen_%d", w.scanID)
+		_, err = conn.ExecContext(ctx, fmt.Sprintf(sqlSeenCreate, w.seen))
+	}
+	if err != nil {
+		conn.Close()
+		return nil, err
 	}
 	return w, nil
 }
@@ -101,14 +126,15 @@ func rootPathsTx(ctx context.Context, tx *sql.Tx) ([]string, error) {
 }
 
 type scanWriter struct {
-	db        *sql.DB
+	conn      *sql.Conn // the writer's connection, held for the whole scan
 	rootID    int64
+	scanID    int64
+	seen      string // name of the scan's seen table
 	batchSize int
 
-	upsertStmt, idStmt *sql.Stmt
-
 	tx      *sql.Tx // open batch; nil between batches
-	pending int     // entries written in the open batch
+	stmts   batchStmts
+	pending int // entries written in the open batch
 
 	// ancestors holds the directories from the root down to the one the walk
 	// is in. A depth-first walk only ever needs these to find a parent, so
@@ -117,6 +143,12 @@ type scanWriter struct {
 
 	stats catalog.ScanStats
 	done  bool
+}
+
+// batchStmts are prepared on each batch's transaction: SQLite parses them
+// once per batch, not per row.
+type batchStmts struct {
+	upsert, id, seenAdd *sql.Stmt
 }
 
 type dirRef struct {
@@ -146,7 +178,13 @@ func (w *scanWriter) Add(ctx context.Context, e uvsh.Entry) error {
 	id, written, err := w.upsert(ctx, r)
 	if err == nil && !written && e.Kind == uvsh.Dir {
 		// The upsert returns no id when unchanged, but children need it.
-		err = w.tx.StmtContext(ctx, w.idStmt).QueryRowContext(ctx, w.rootID, r.parent, r.name).Scan(&id)
+		err = w.stmts.id.QueryRowContext(ctx, w.rootID, r.parent, r.name).Scan(&id)
+	}
+	if err != nil {
+		return fmt.Errorf("%q: %w", e.Path, err)
+	}
+	if err == nil && r.parent.Valid {
+		_, err = w.stmts.seenAdd.ExecContext(ctx, r.parent, r.name)
 	}
 	if err != nil {
 		return fmt.Errorf("%q: %w", e.Path, err)
@@ -177,12 +215,31 @@ func (w *scanWriter) upsert(ctx context.Context, r row) (id int64, written bool,
 	if err := w.ensureTx(ctx); err != nil {
 		return 0, false, err
 	}
-	err = w.tx.StmtContext(ctx, w.upsertStmt).QueryRowContext(ctx,
+	err = w.stmts.upsert.QueryRowContext(ctx,
 		w.rootID, r.parent, r.name, string(r.kind), r.size, r.mtime, r.target).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, false, nil
 	}
 	return id, err == nil, err
+}
+
+func (w *scanWriter) Skip(ctx context.Context, p string) error {
+	if err := w.ensureTx(ctx); err != nil {
+		return err
+	}
+	var err error
+	if p == "." {
+		_, err = w.tx.ExecContext(ctx, fmt.Sprintf(sqlSeenAll, w.seen), w.rootID)
+	} else {
+		var dirID int64
+		if dirID, err = w.parentID(p); err == nil {
+			_, err = w.tx.ExecContext(ctx, fmt.Sprintf(sqlSeenSubtree, w.seen), dirID, path.Base(p))
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("skip %q: %w", p, err)
+	}
+	return nil
 }
 
 // parentID pops ancestors the walk has left, then returns the parent of p.
@@ -208,9 +265,18 @@ func (w *scanWriter) ensureTx(ctx context.Context) error {
 	// database/sql rolls a transaction back as soon as its BeginTx ctx is
 	// cancelled. The batch must outlive a Ctrl-C so Finish can still commit
 	// what was walked; Abort ends it otherwise. Statements keep using ctx.
-	tx, err := w.db.BeginTx(context.WithoutCancel(ctx), nil)
+	tx, err := w.conn.BeginTx(context.WithoutCancel(ctx), nil)
 	if err != nil {
 		return err
+	}
+	for _, s := range []struct {
+		stmt **sql.Stmt
+		sql  string
+	}{{&w.stmts.upsert, sqlUpsert}, {&w.stmts.id, sqlEntryID}, {&w.stmts.seenAdd, fmt.Sprintf(sqlSeenAdd, w.seen)}} {
+		if *s.stmt, err = tx.PrepareContext(ctx, s.sql); err != nil {
+			tx.Rollback()
+			return err
+		}
 	}
 	w.tx, w.pending = tx, 0
 	return nil
@@ -224,6 +290,7 @@ func (w *scanWriter) step() error {
 	return w.commit()
 }
 
+// commit ends the open batch; its statements close with it.
 func (w *scanWriter) commit() error {
 	if w.tx == nil {
 		return nil
@@ -237,14 +304,42 @@ func (w *scanWriter) commit() error {
 	return nil
 }
 
-func (w *scanWriter) Finish(_ context.Context) (catalog.ScanStats, error) {
+func (w *scanWriter) Finish(ctx context.Context, complete bool) (catalog.ScanStats, error) {
 	if w.done {
 		return w.stats, errors.New("scan writer already finished")
 	}
 	err := w.commit()
-	w.done = true
-	w.closeStmts()
+	if err == nil {
+		err = w.close(ctx, complete)
+	}
+	w.release()
 	return w.stats, err
+}
+
+// close marks what the scan didn't see as missing, if it was complete, and
+// records the scan's end, in one transaction.
+func (w *scanWriter) close(ctx context.Context, complete bool) error {
+	tx, err := w.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if complete {
+		res, err := tx.ExecContext(ctx, fmt.Sprintf(sqlMarkMissing, w.seen), w.scanID, w.rootID)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		w.stats.Missing = int(n)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE scans SET finished_ns = ?, complete = ? WHERE id = ?`,
+		time.Now().UnixNano(), complete, w.scanID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (w *scanWriter) Abort() {
@@ -255,14 +350,12 @@ func (w *scanWriter) Abort() {
 		w.tx.Rollback()
 		w.tx = nil
 	}
-	w.done = true
-	w.closeStmts()
+	w.release()
 }
 
-func (w *scanWriter) closeStmts() {
-	for _, s := range []*sql.Stmt{w.upsertStmt, w.idStmt} {
-		if s != nil {
-			s.Close()
-		}
-	}
+// release drops the seen table and gives the connection back to the pool.
+func (w *scanWriter) release() {
+	w.done = true
+	w.conn.ExecContext(context.Background(), "DROP TABLE IF EXISTS "+w.seen)
+	w.conn.Close()
 }

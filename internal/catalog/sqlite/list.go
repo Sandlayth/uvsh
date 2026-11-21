@@ -11,10 +11,11 @@ import (
 	"github.com/sandlayth/uvsh/internal/uvsh"
 )
 
-// One seek on the (parent_id, name) index, then at most :n rows in order.
+// One seek on the (parent_id, name) index, then rows in order until :n are
+// present: missing entries are kept in the catalog but never listed.
 // Names are unique per dir, so the cursor's name alone is enough.
 const sqlList = `SELECT ` + entryCols + ` FROM entries
-	WHERE parent_id = :dir AND name > :name ORDER BY name LIMIT :n`
+	WHERE parent_id = :dir AND name > :name AND missing_since IS NULL ORDER BY name LIMIT :n`
 
 const entryCols = `id, name, kind, coalesce(size, 0), mtime_ns, coalesce(target, '')`
 
@@ -100,7 +101,7 @@ func (l txLookup) Root(ctx context.Context, path string) (catalog.Node, bool, er
 
 func (l txLookup) Child(ctx context.Context, dir catalog.Node, name string) (catalog.Node, bool, error) {
 	return found(scanNode(l.tx.QueryRowContext(ctx, `SELECT `+entryCols+` FROM entries
-		WHERE parent_id = ? AND name = ?`, dir.ID, name)))
+		WHERE parent_id = ? AND name = ? AND missing_since IS NULL`, dir.ID, name)))
 }
 
 // scanNode reads entryCols from a *sql.Row or *sql.Rows.

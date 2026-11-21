@@ -90,7 +90,7 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer, logge
 		for _, k := range []uvsh.Kind{uvsh.Dir, uvsh.File, uvsh.Symlink} {
 			attrs = append(attrs, string(k)+"s_written", rep.Stats.Written[k], string(k)+"s_unchanged", rep.Stats.Unchanged[k])
 		}
-		attrs = append(attrs, "batches", rep.Stats.Batches)
+		attrs = append(attrs, "missing", rep.Stats.Missing, "batches", rep.Stats.Batches)
 	}
 	attrs = append(attrs, "elapsed", time.Since(start).Round(time.Millisecond))
 	if interrupted {

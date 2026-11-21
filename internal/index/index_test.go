@@ -101,6 +101,61 @@ func TestRecordReportsSkipped(t *testing.T) {
 	}
 }
 
+func TestRecordMarksMissing(t *testing.T) {
+	root, c := disk(t), open(t)
+	_, err := Record(t.Context(), c, root, Options{BatchSize: 1000})
+	must(t, err)
+	must(t, os.RemoveAll(filepath.Join(root, "a/z")))
+	must(t, os.Remove(filepath.Join(root, "b.txt")))
+	rep, err := Record(t.Context(), c, root, Options{BatchSize: 1000})
+	must(t, err)
+	if rep.Stats.Missing != 3 {
+		t.Errorf("Missing = %d, want 3 (a/z, a/z/last.txt, b.txt)", rep.Stats.Missing)
+	}
+	for _, p := range []string{"a/z/last.txt", "b.txt"} {
+		if _, err := c.Stat(t.Context(), filepath.Join(root, p)); !errors.Is(err, catalog.ErrNotFound) {
+			t.Errorf("Stat(%s) error = %v, want ErrNotFound", p, err)
+		}
+	}
+}
+
+// A walk that couldn't even start must not be taken for a complete one that
+// found nothing.
+func TestRecordBadExcludeMarksNothing(t *testing.T) {
+	root, c := disk(t), open(t)
+	_, err := Record(t.Context(), c, root, Options{BatchSize: 1000})
+	must(t, err)
+	if _, err := Record(t.Context(), c, root, Options{BatchSize: 1000, Exclude: []string{"["}}); err == nil {
+		t.Fatal("Record with a bad exclude pattern succeeded")
+	}
+	if _, err := c.Stat(t.Context(), filepath.Join(root, "b.txt")); err != nil {
+		t.Errorf("b.txt after the failed scan: %v", err)
+	}
+	if _, err := Walk(t.Context(), root, Options{Exclude: []string{"["}}, func(uvsh.Entry) error { return nil }); err == nil {
+		t.Error("Walk with a bad exclude pattern succeeded")
+	}
+}
+
+func TestRecordKeepsUnreadableDir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	root, c := disk(t), open(t)
+	_, err := Record(t.Context(), c, root, Options{BatchSize: 1000})
+	must(t, err)
+	locked := filepath.Join(root, "a/z")
+	must(t, os.Chmod(locked, 0))
+	t.Cleanup(func() { os.Chmod(locked, 0o755) })
+	rep, err := Record(t.Context(), c, root, Options{BatchSize: 1000})
+	must(t, err)
+	if rep.Skipped != 1 || rep.Stats.Missing != 0 {
+		t.Errorf("skipped = %d, missing = %d; want 1, 0", rep.Skipped, rep.Stats.Missing)
+	}
+	if _, err := c.Stat(t.Context(), filepath.Join(locked, "last.txt")); err != nil {
+		t.Errorf("last.txt in the unreadable dir: %v", err)
+	}
+}
+
 // cancelling cancels its ctx once n entries were added, as Ctrl-C would.
 type cancelling struct {
 	catalog.Catalog

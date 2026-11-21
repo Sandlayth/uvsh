@@ -140,5 +140,21 @@ expect "ls shows each link's status" [ "$statuses" = "$want_statuses" ]
 exits_1() { "$@" >/dev/null 2>&1 && return 1; [ $? -eq 1 ]; }
 expect "ls of a path not in the catalog exits 1" exits_1 "$UVSH" ls -db "sqlite:$db" "$DIR/tree/nope"
 
+# Deleting from disk: a complete rescan marks exactly what's gone as missing,
+# and the catalog matches the disk again.
+gone=$(find "$DIR/tree/deep" | wc -l | tr -d ' ')
+victim=$(find "$DIR/tree/photos/2023" -type f | head -n 1)
+rm -rf "$DIR/tree/deep" && rm -f "$victim"
+summary=$("$UVSH" scan -db "sqlite:$db" "$DIR/tree" 2>&1 >/dev/null | grep 'scan complete' || true)
+echo "$summary"
+check "rescan after deleting" $((gone + 1)) "$summary" missing
+check "rescan after deleting" 0 "$summary" files_written
+expect "ls of a deleted dir exits 1" exits_1 "$UVSH" ls -db "sqlite:$db" "$DIR/tree/deep"
+"$UVSH" scan -dry-run "$DIR/tree" 2>/dev/null | grep -v '^other	' >"$DIR/walk.out" || true
+"$UVSH" ls -db "sqlite:$db" -R "$DIR/tree" 2>&1 | sed "s/$tab\[[a-z]*\]\$//" >"$DIR/tree.out" || true
+expect "ls -R matches scan -dry-run after deleting" same "$DIR/walk.out" "$DIR/tree.out"
+summary=$("$UVSH" scan -db "sqlite:$db" "$DIR/tree" 2>&1 >/dev/null | grep 'scan complete' || true)
+check "rescan of what's left" 0 "$summary" missing
+
 [ "$failures" -eq 0 ] || { echo "$failures check(s) failed" >&2; exit 1; }
 echo "all checks passed"

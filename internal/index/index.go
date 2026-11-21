@@ -36,11 +36,13 @@ func Walk(ctx context.Context, dir string, opts Options, fn func(uvsh.Entry) err
 	if err != nil {
 		return Report{}, err
 	}
-	return walk(ctx, root, opts, fn)
+	return walk(ctx, root, opts, fn, nil)
 }
 
-// Record walks dir into cat. Once ctx is cancelled (Ctrl-C) it still commits
-// what was walked, since those rows are true, and returns ctx's error.
+// Record walks dir into cat. Entries recorded before but not found this time
+// are marked missing, once the whole tree was walked. Once ctx is cancelled
+// (Ctrl-C) it still commits what was walked, since those rows are true, and
+// returns ctx's error.
 func Record(ctx context.Context, cat catalog.Catalog, dir string, opts Options) (Report, error) {
 	// Register the real path, so a symlinked alias can't slip past the root
 	// overlap check. Only the root is resolved; the walk never follows links.
@@ -53,20 +55,24 @@ func Record(ctx context.Context, cat catalog.Catalog, dir string, opts Options) 
 		return Report{}, err
 	}
 	defer w.Abort()
-	rep, walkErr := walk(ctx, root, opts, func(e uvsh.Entry) error {
+	add := func(e uvsh.Entry) error {
 		if e.Kind == uvsh.Other {
 			return nil // walked and counted, never stored
 		}
 		return w.Add(ctx, e)
-	})
+	}
+	skip := func(p string) error { return w.Skip(ctx, p) }
+	rep, walkErr := walk(ctx, root, opts, add, skip)
 	if walkErr != nil && ctx.Err() == nil {
 		return rep, walkErr
 	}
-	rep.Stats, err = w.Finish(context.WithoutCancel(ctx))
+	rep.Stats, err = w.Finish(context.WithoutCancel(ctx), walkErr == nil)
 	return rep, errors.Join(walkErr, err)
 }
 
-func walk(ctx context.Context, root string, opts Options, fn func(uvsh.Entry) error) (Report, error) {
+// walk calls fn with each entry and skip, if not nil, with the path of each
+// entry that couldn't be read.
+func walk(ctx context.Context, root string, opts Options, fn func(uvsh.Entry) error, skip func(path string) error) (Report, error) {
 	r, err := os.OpenRoot(root)
 	if err != nil {
 		return Report{}, err
@@ -74,13 +80,23 @@ func walk(ctx context.Context, root string, opts Options, fn func(uvsh.Entry) er
 	defer r.Close()
 	rep := Report{Root: root, Seen: map[uvsh.Kind]int{}}
 	for e, err := range scan.Walk(ctx, r.FS(), scan.Options{Exclude: opts.Exclude}) {
-		if err != nil {
-			if ctx.Err() != nil {
-				return rep, err
-			}
+		switch {
+		case err == nil:
+		case ctx.Err() != nil:
+			return rep, err
+		case e.Path == "":
+			// Not about an entry (a bad exclude pattern): the walk is over,
+			// and a walk that stopped early must not pass for complete.
+			return rep, err
+		default:
 			rep.Skipped++
 			if opts.OnSkip != nil {
 				opts.OnSkip(err)
+			}
+			if skip != nil {
+				if err := skip(e.Path); err != nil {
+					return rep, err
+				}
 			}
 			continue
 		}

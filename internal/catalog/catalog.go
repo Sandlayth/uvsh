@@ -53,23 +53,31 @@ type ScanOptions struct {
 }
 
 // ScanWriter records one walk. Entries must arrive parents first, as a
-// depth-first walk yields them, starting with the root dir ".".
+// depth-first walk yields them, starting with the root dir ".". A catalog
+// runs one scan at a time: BeginScan waits for the previous one to end.
 type ScanWriter interface {
 	// Add records e, whose Path is relative to the scanned root. Other kinds
 	// are rejected.
 	Add(ctx context.Context, e uvsh.Entry) error
-	// Finish commits the last batch and reports what was written. It must
-	// still commit after the walk's ctx was cancelled (Ctrl-C): callers pass
-	// a ctx that isn't, e.g. context.WithoutCancel(walkCtx).
-	Finish(ctx context.Context) (ScanStats, error)
+	// Skip reports that the entry at path couldn't be read: what the catalog
+	// holds at and below it is kept as is rather than marked missing.
+	Skip(ctx context.Context, path string) error
+	// Finish commits the last batch and reports what was written. complete
+	// says the whole tree was walked; only then are the root's entries this
+	// scan didn't see marked missing. It must still commit after the walk's
+	// ctx was cancelled (Ctrl-C): callers pass a ctx that isn't, e.g.
+	// context.WithoutCancel(walkCtx).
+	Finish(ctx context.Context, complete bool) (ScanStats, error)
 	// Abort discards the uncommitted batch. It is a no-op after Finish, so it
 	// can always be deferred.
 	Abort()
 }
 
-// ScanStats counts, per kind, entries inserted or changed (Written) and
-// entries already up to date (Unchanged), plus the committed transactions.
+// ScanStats counts, per kind, entries inserted, changed or back from missing
+// (Written) and entries already up to date (Unchanged); then the entries
+// newly marked missing and the committed transactions.
 type ScanStats struct {
 	Written, Unchanged map[uvsh.Kind]int
+	Missing            int
 	Batches            int
 }

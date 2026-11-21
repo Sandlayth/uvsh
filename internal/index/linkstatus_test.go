@@ -33,7 +33,7 @@ func put(t *testing.T, c catalog.Catalog, root string, links map[string]string) 
 			}
 		}
 	}
-	_, err = w.Finish(ctx)
+	_, err = w.Finish(ctx, true)
 	must(t, err)
 }
 
