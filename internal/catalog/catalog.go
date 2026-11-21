@@ -79,6 +79,7 @@ type ScanOptions struct {
 type ScanWriter interface {
 	AddDir(ctx context.Context, d DirRecord) error
 	AddFile(ctx context.Context, f FileRecord) error
+	AddLink(ctx context.Context, l LinkRecord) error
 	// Finish commits the last batch and reports what was written. It must
 	// still commit after the walk's ctx was cancelled (Ctrl-C): callers pass
 	// a ctx that isn't, e.g. context.WithoutCancel(walkCtx).
@@ -100,10 +101,17 @@ type FileRecord struct {
 	ModTime time.Time
 }
 
+type LinkRecord struct {
+	Path    string
+	Target  string // as stored in the link, never resolved
+	ModTime time.Time
+}
+
 // ScanStats counts rows inserted or changed (Written) and rows already
 // up to date (Unchanged), plus the number of committed transactions.
 type ScanStats struct {
 	DirsWritten, DirsUnchanged   int
 	FilesWritten, FilesUnchanged int
+	LinksWritten, LinksUnchanged int
 	Batches                      int
 }

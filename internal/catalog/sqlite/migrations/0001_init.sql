@@ -30,3 +30,13 @@ CREATE TABLE files (
 	mtime_ns INTEGER NOT NULL,
 	UNIQUE (dir_id, name)
 ) STRICT;
+
+-- target is exactly what readlink returned; it is never followed at scan time.
+CREATE TABLE links (
+	id       INTEGER PRIMARY KEY,
+	dir_id   INTEGER NOT NULL REFERENCES dirs(id),
+	name     TEXT    NOT NULL,
+	target   TEXT    NOT NULL,
+	mtime_ns INTEGER NOT NULL,
+	UNIQUE (dir_id, name)
+) STRICT;

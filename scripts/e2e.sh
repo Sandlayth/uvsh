@@ -81,6 +81,7 @@ summary=$("$UVSH" scan -db "sqlite:$db" -batch 5 "$DIR/tree" 2>&1 >/dev/null | g
 echo "$summary"
 check "record" "$dirs" "$summary" dirs_written
 check "record" "$files" "$summary" files_written
+check "record" "$symlinks" "$summary" links_written
 check "record" "$errors" "$summary" errors
 
 summary=$("$UVSH" scan -db "sqlite:$db" -batch 5 "$DIR/tree" 2>&1 >/dev/null | grep 'scan complete' || true)
@@ -88,6 +89,8 @@ echo "$summary"
 check "rescan" 0 "$summary" dirs_written
 check "rescan" 0 "$summary" files_written
 check "rescan" "$files" "$summary" files_unchanged
+check "rescan" 0 "$summary" links_written
+check "rescan" "$symlinks" "$summary" links_unchanged
 
 # The tree is now a registered root: nothing inside or around it may be one.
 overlap_refused() { "$UVSH" scan -db "sqlite:$db" "$1" 2>&1 >/dev/null | grep -q 'overlaps the registered root'; }

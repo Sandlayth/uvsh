@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -32,6 +33,7 @@ func Run(t *testing.T, open Opener) {
 		{"ScanAbortDiscardsOpenBatch", testScanAbortDiscardsOpenBatch},
 		{"ScanFinishAfterCancel", testScanFinishAfterCancel},
 		{"ScanRejects", testScanRejects},
+		{"ScanLinks", testScanLinks},
 		{"ScanRootOverlap", testScanRootOverlap},
 		{"ScanRootOverlapConcurrent", testScanRootOverlapConcurrent},
 		{"ListPages", testListPages},
@@ -46,7 +48,8 @@ func Run(t *testing.T, open Opener) {
 
 var t0 = time.Date(2023, 1, 15, 12, 30, 0, 0, time.UTC)
 
-// tree is a walk in depth-first order: dirs end with "/", the rest are files.
+// tree is a walk in depth-first order: dirs end with "/", links are
+// "name -> target", the rest are files.
 type tree []struct {
 	path string
 	size int64
@@ -72,7 +75,9 @@ func record(t *testing.T, c catalog.Catalog, root string, batch int, entries tre
 	}
 	defer w.Abort()
 	for _, e := range entries {
-		if n := len(e.path); e.path[n-1] == '/' {
+		if name, target, ok := strings.Cut(e.path, " -> "); ok {
+			err = w.AddLink(ctx, catalog.LinkRecord{Path: name, Target: target, ModTime: e.mod})
+		} else if n := len(e.path); e.path[n-1] == '/' {
 			err = w.AddDir(ctx, catalog.DirRecord{Path: e.path[:n-1], ModTime: e.mod})
 		} else {
 			err = w.AddFile(ctx, catalog.FileRecord{Path: e.path, Size: e.size, ModTime: e.mod})
@@ -279,6 +284,30 @@ func testScanRejects(t *testing.T, open Opener) {
 	defer w.Abort()
 	if err := w.AddFile(ctx, catalog.FileRecord{Path: "orphan/f", ModTime: t0}); err == nil {
 		t.Error("AddFile without its parent dir succeeded")
+	}
+}
+
+func testScanLinks(t *testing.T, open Opener) {
+	c := open(t)
+	links := tree{
+		{"./", 0, t0},
+		{"a.txt", 1, t0},
+		{"dangling -> nope", 0, t0}, // targets are stored, never checked
+		{"loop -> loop", 0, t0},
+		{"sub/", 0, t0},
+		{"sub/up -> ../a.txt", 0, t0},
+	}
+	if got := record(t, c, "/data", 1000, links); got.LinksWritten != 3 || got.LinksUnchanged != 0 {
+		t.Errorf("first scan: stats = %+v, want 3 links written", got)
+	}
+	if got := record(t, c, "/data", 1000, links); got.LinksWritten != 0 || got.LinksUnchanged != 3 {
+		t.Errorf("rescan: stats = %+v, want 3 links unchanged", got)
+	}
+	changed := append(tree(nil), links...)
+	changed[2].path = "dangling -> a.txt" // retargeted
+	changed[3].mod = t0.Add(time.Second)  // recreated, same target
+	if got := record(t, c, "/data", 1000, changed); got.LinksWritten != 2 || got.LinksUnchanged != 1 {
+		t.Errorf("changed: stats = %+v, want 2 links written, 1 unchanged", got)
 	}
 }
 

@@ -125,6 +125,8 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer, logge
 			"dirs_written", stats.DirsWritten,
 			"files_written", stats.FilesWritten,
 			"files_unchanged", stats.FilesUnchanged,
+			"links_written", stats.LinksWritten,
+			"links_unchanged", stats.LinksUnchanged,
 			"batches", stats.Batches,
 		)
 	}
@@ -147,6 +149,8 @@ func record(ctx context.Context, w catalog.ScanWriter, e scan.Entry) error {
 		return w.AddDir(ctx, catalog.DirRecord{Path: e.Path, ModTime: e.ModTime})
 	case scan.File:
 		return w.AddFile(ctx, catalog.FileRecord{Path: e.Path, Size: e.Size, ModTime: e.ModTime})
+	case scan.Symlink:
+		return w.AddLink(ctx, catalog.LinkRecord{Path: e.Path, Target: e.Target, ModTime: e.ModTime})
 	}
 	return nil
 }

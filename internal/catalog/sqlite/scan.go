@@ -20,6 +20,9 @@ const (
 	sqlFileUpsert = `INSERT INTO files (dir_id, name, size, mtime_ns) VALUES (?, ?, ?, ?)
 		ON CONFLICT (dir_id, name) DO UPDATE SET size = excluded.size, mtime_ns = excluded.mtime_ns
 		WHERE files.size != excluded.size OR files.mtime_ns != excluded.mtime_ns`
+	sqlLinkUpsert = `INSERT INTO links (dir_id, name, target, mtime_ns) VALUES (?, ?, ?, ?)
+		ON CONFLICT (dir_id, name) DO UPDATE SET target = excluded.target, mtime_ns = excluded.mtime_ns
+		WHERE links.target != excluded.target OR links.mtime_ns != excluded.mtime_ns`
 )
 
 func (c *Catalog) BeginScan(ctx context.Context, root string, opts catalog.ScanOptions) (catalog.ScanWriter, error) {
@@ -40,7 +43,7 @@ func (c *Catalog) BeginScan(ctx context.Context, root string, opts catalog.ScanO
 	for _, s := range []struct {
 		stmt **sql.Stmt
 		sql  string
-	}{{&w.dirGet, sqlDirGet}, {&w.dirIns, sqlDirIns}, {&w.dirUpd, sqlDirUpd}, {&w.fileUpsert, sqlFileUpsert}} {
+	}{{&w.dirGet, sqlDirGet}, {&w.dirIns, sqlDirIns}, {&w.dirUpd, sqlDirUpd}, {&w.fileUpsert, sqlFileUpsert}, {&w.linkUpsert, sqlLinkUpsert}} {
 		if *s.stmt, err = c.writer.PrepareContext(ctx, s.sql); err != nil {
 			w.closeStmts()
 			return nil, err
@@ -98,7 +101,7 @@ type scanWriter struct {
 	rootID    int64
 	batchSize int
 
-	dirGet, dirIns, dirUpd, fileUpsert *sql.Stmt
+	dirGet, dirIns, dirUpd, fileUpsert, linkUpsert *sql.Stmt
 
 	tx      *sql.Tx // open batch; nil between batches
 	pending int     // entries written in the open batch
@@ -153,24 +156,34 @@ func (w *scanWriter) AddDir(ctx context.Context, d catalog.DirRecord) error {
 }
 
 func (w *scanWriter) AddFile(ctx context.Context, f catalog.FileRecord) error {
-	dirID, err := w.parentID(f.Path)
+	return w.upsert(ctx, w.fileUpsert, f.Path, &w.stats.FilesWritten, &w.stats.FilesUnchanged, f.Size, f.ModTime.UnixNano())
+}
+
+func (w *scanWriter) AddLink(ctx context.Context, l catalog.LinkRecord) error {
+	return w.upsert(ctx, w.linkUpsert, l.Path, &w.stats.LinksWritten, &w.stats.LinksUnchanged, l.Target, l.ModTime.UnixNano())
+}
+
+// upsert runs a conditional upsert of the entry at p with values after its
+// (dir_id, name), and counts it as written or unchanged.
+func (w *scanWriter) upsert(ctx context.Context, stmt *sql.Stmt, p string, written, unchanged *int, values ...any) error {
+	dirID, err := w.parentID(p)
 	if err != nil {
 		return err
 	}
 	if err := w.ensureTx(ctx); err != nil {
 		return err
 	}
-	res, err := w.tx.StmtContext(ctx, w.fileUpsert).ExecContext(ctx, dirID, path.Base(f.Path), f.Size, f.ModTime.UnixNano())
+	res, err := w.tx.StmtContext(ctx, stmt).ExecContext(ctx, append([]any{dirID, path.Base(p)}, values...)...)
 	if err != nil {
-		return fmt.Errorf("file %q: %w", f.Path, err)
+		return fmt.Errorf("%q: %w", p, err)
 	}
 	// 1 when inserted or changed, 0 when the upsert's WHERE found it unchanged.
 	if n, err := res.RowsAffected(); err != nil {
 		return err
 	} else if n > 0 {
-		w.stats.FilesWritten++
+		*written++
 	} else {
-		w.stats.FilesUnchanged++
+		*unchanged++
 	}
 	return w.step()
 }
@@ -250,7 +263,7 @@ func (w *scanWriter) Abort() {
 }
 
 func (w *scanWriter) closeStmts() {
-	for _, s := range []*sql.Stmt{w.dirGet, w.dirIns, w.dirUpd, w.fileUpsert} {
+	for _, s := range []*sql.Stmt{w.dirGet, w.dirIns, w.dirUpd, w.fileUpsert, w.linkUpsert} {
 		if s != nil {
 			s.Close()
 		}
