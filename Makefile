@@ -39,7 +39,7 @@ e2e: build
 	@dir=$$(mktemp -d) && trap 'scripts/mkfixture.sh -clean "$$dir/fx"; rmdir "$$dir"' EXIT && \
 	scripts/mkfixture.sh "$$dir/fx" >/dev/null && scripts/e2e.sh $(BIN)/uvsh "$$dir/fx"
 
-# Time and peak memory of a real scan: make bench BENCH_DIR=/some/dir
+# Time, peak memory and disk writes of a real scan: make bench BENCH_DIR=/some/dir
 bench: build
 	@test -n "$(BENCH_DIR)" || { echo "set BENCH_DIR=/dir/to/scan (and optionally BENCH_EXCLUDES, BENCH_RUNS, BENCH_DB)"; exit 1; }
 	@scripts/bench.sh $(BIN)/uvsh "$(BENCH_DIR)" "$(BENCH_EXCLUDES)" $(BENCH_RUNS) "$(BENCH_DB)"
