@@ -8,12 +8,12 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/sandlayth/uvsh/internal/catalog"
 	"github.com/sandlayth/uvsh/internal/catalog/backend"
+	"github.com/sandlayth/uvsh/internal/index"
 	"github.com/sandlayth/uvsh/internal/scan"
 )
 
@@ -42,7 +42,10 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer, logge
 		return errUsage
 	}
 
-	var opts scan.Options
+	opts := index.Options{
+		BatchSize: *batch,
+		OnSkip:    func(err error) { logger.WarnContext(ctx, "skipped", "err", err) },
+	}
 	if *excludeFrom != "" {
 		f, err := os.Open(*excludeFrom)
 		if err != nil {
@@ -55,90 +58,48 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer, logge
 		}
 	}
 
-	dir, err := filepath.Abs(fs.Arg(0))
-	if err != nil {
-		return err
-	}
-	if dir, err = filepath.EvalSymlinks(dir); err != nil {
-		return err
-	}
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return err
-	}
-	defer root.Close()
-
-	handle := func(e catalog.Entry) error {
-		printEntry(stdout, e)
-		return nil
-	}
-	var w catalog.ScanWriter
-	if *dsn != "" {
-		cat, err := backend.Open(ctx, *dsn)
-		if err != nil {
+	start := time.Now()
+	var rep index.Report
+	if *dsn == "" {
+		rep, err = index.Walk(ctx, fs.Arg(0), opts, func(e catalog.Entry) error {
+			printEntry(stdout, e)
+			return nil
+		})
+	} else {
+		var cat catalog.Catalog
+		if cat, err = backend.Open(ctx, *dsn); err != nil {
 			return err
 		}
 		defer func() { err = errors.Join(err, cat.Close()) }()
-		if w, err = cat.BeginScan(ctx, dir, catalog.ScanOptions{BatchSize: *batch}); err != nil {
-			return err
-		}
-		defer w.Abort()
-		handle = func(e catalog.Entry) error {
-			if e.Kind == catalog.Other {
-				return nil // walked and counted, never stored
-			}
-			return w.Add(ctx, e)
-		}
+		rep, err = index.Record(ctx, cat, fs.Arg(0), opts)
 	}
-
-	start := time.Now()
-	counts := map[catalog.Kind]int{}
-	var failed int
-	var interrupted error
-	for e, err := range scan.Walk(ctx, root.FS(), opts) {
-		if err != nil {
-			if ctx.Err() != nil {
-				interrupted = err
-				break
-			}
-			failed++
-			logger.WarnContext(ctx, "skipped", "err", err)
-			continue
-		}
-		counts[e.Kind]++
-		if err := handle(e); err != nil {
-			return err
-		}
+	interrupted := err != nil && ctx.Err() != nil
+	if err != nil && !interrupted {
+		return err
 	}
 
 	attrs := []any{
-		"dirs", counts[catalog.Dir],
-		"files", counts[catalog.File],
-		"symlinks", counts[catalog.Symlink],
-		"other", counts[catalog.Other],
-		"errors", failed,
+		"dirs", rep.Seen[catalog.Dir],
+		"files", rep.Seen[catalog.File],
+		"symlinks", rep.Seen[catalog.Symlink],
+		"other", rep.Seen[catalog.Other],
+		"errors", rep.Skipped,
 	}
-	if w != nil {
-		// Commit what was walked even after Ctrl-C: those rows are true. ctx is
-		// cancelled by then, so the commit runs on a context that isn't.
-		stats, err := w.Finish(context.WithoutCancel(ctx))
-		if err != nil {
-			return err
-		}
+	if *dsn != "" {
 		for _, k := range []catalog.Kind{catalog.Dir, catalog.File, catalog.Symlink} {
-			attrs = append(attrs, string(k)+"s_written", stats.Written[k], string(k)+"s_unchanged", stats.Unchanged[k])
+			attrs = append(attrs, string(k)+"s_written", rep.Stats.Written[k], string(k)+"s_unchanged", rep.Stats.Unchanged[k])
 		}
-		attrs = append(attrs, "batches", stats.Batches)
+		attrs = append(attrs, "batches", rep.Stats.Batches)
 	}
 	attrs = append(attrs, "elapsed", time.Since(start).Round(time.Millisecond))
-	if interrupted != nil {
+	if interrupted {
 		logger.WarnContext(ctx, "scan interrupted", attrs...)
-		return interrupted
+		return err
 	}
 	logger.InfoContext(ctx, "scan complete", attrs...)
 
-	if failed > 0 {
-		return fmt.Errorf("scan finished with %d errors", failed)
+	if rep.Skipped > 0 {
+		return fmt.Errorf("scan finished with %d errors", rep.Skipped)
 	}
 	return nil
 }

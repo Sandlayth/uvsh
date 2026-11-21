@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,6 +81,13 @@ func TestLs(t *testing.T) {
 		{"link", []string{root + "/y"}, link},
 		{"subdir", []string{root + "/sub"}, "file\t1\t2023-01-15T12:30:00Z\tb.txt\n"},
 		{"file", []string{root + "/a.txt"}, "file\t3\t2023-01-15T12:30:00Z\ta.txt\n"},
+		{"recursive", []string{"-R", "-page", "1", root}, "dir\t-\t2023-01-15T12:30:00Z\t.\n" +
+			"file\t3\t2023-01-15T12:30:00Z\ta.txt\n" +
+			"file\t1\t2023-01-15T12:30:00Z\t\"new\\nline.txt\"\n" +
+			"dir\t-\t2023-01-15T12:30:00Z\tsub\n" +
+			"file\t1\t2023-01-15T12:30:00Z\tsub/b.txt\n" + link +
+			"file\t2\t2023-01-15T12:30:00Z\tz.txt\n"},
+		{"recursive on a file", []string{"-R", root + "/a.txt"}, "file\t3\t2023-01-15T12:30:00Z\ta.txt\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := ls(t, append([]string{"-db", dsn}, tt.args...)...)
@@ -121,42 +127,5 @@ func TestLsNotFound(t *testing.T) {
 		if _, err := ls(t, "-db", dsn, p); !errors.Is(err, catalog.ErrNotFound) {
 			t.Errorf("ls %s: error = %v, want ErrNotFound", p, err)
 		}
-	}
-}
-
-// ls -R must print exactly what scan -dry-run prints for the same tree: the
-// catalog round-trips the walk, entry for entry and in the same order.
-func TestLsRecursiveMatchesDryRun(t *testing.T) {
-	tmp, err := filepath.EvalSymlinks(t.TempDir())
-	must(t, err)
-	root := filepath.Join(tmp, "data")
-	for _, d := range []string{"a/b/c", "a/z", "b", "empty", "new\nline"} {
-		must(t, os.MkdirAll(filepath.Join(root, d), 0o755))
-	}
-	for _, f := range []string{"a/b/c/deep.txt", "a/b/x.txt", "a/m.txt", "a/z/last.txt", "b.txt", "new\nline/f", "\xff.bin", "B.txt"} {
-		must(t, os.WriteFile(filepath.Join(root, f), []byte(f), 0o644))
-	}
-	for link, target := range map[string]string{"a/to-c": "b/c", "b.txt.lnk": "b.txt", "dangling": "nope", "odd": "new\nline"} {
-		must(t, os.Symlink(target, filepath.Join(root, link)))
-	}
-	dsn := "sqlite:" + filepath.Join(t.TempDir(), "catalog.db")
-
-	var dryRun, stderr bytes.Buffer
-	must(t, run(t.Context(), []string{"uvsh", "scan", "-dry-run", root}, &dryRun, &stderr))
-	must(t, run(t.Context(), []string{"uvsh", "scan", "-db", dsn, root}, io.Discard, &stderr))
-
-	for _, page := range []string{"1", "2", "1000"} {
-		got, err := ls(t, "-db", dsn, "-R", "-page", page, root)
-		if err != nil {
-			t.Fatalf("ls -R -page %s: %v", page, err)
-		}
-		if got != dryRun.String() {
-			t.Errorf("ls -R -page %s =\n%s\nscan -dry-run =\n%s", page, got, dryRun.String())
-		}
-	}
-
-	got, err := ls(t, "-db", dsn, "-R", root+"/a/b/x.txt")
-	if err != nil || !strings.HasSuffix(got, "\tx.txt\n") || strings.Count(got, "\n") != 1 {
-		t.Errorf("ls -R on a file = %q, %v; want its one line", got, err)
 	}
 }

@@ -6,13 +6,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"path"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/sandlayth/uvsh/internal/catalog"
 	"github.com/sandlayth/uvsh/internal/catalog/backend"
+	"github.com/sandlayth/uvsh/internal/index"
 )
 
 func runLs(ctx context.Context, args []string, stdout, stderr io.Writer) (err error) {
@@ -66,18 +66,21 @@ func runLs(ctx context.Context, args []string, stdout, stderr io.Writer) (err er
 		return err
 	}
 	if *recursive {
-		return listTree(ctx, cat, dir, *page, stdout)
-	}
-	cursor := *after
-	for printed := 0; *limit == 0 || printed < *limit; {
-		n := *page
-		if *limit > 0 {
-			n = min(n, *limit-printed)
-		}
-		entries, err := cat.List(ctx, dir, cursor, n)
-		if errors.Is(err, catalog.ErrNotDir) && printed == 0 {
-			e, err := cat.Stat(ctx, dir)
+		for e, err := range index.Tree(ctx, cat, dir, *page) {
 			if err != nil {
+				return err
+			}
+			printEntry(stdout, e)
+		}
+		return nil
+	}
+	if *limit > 0 {
+		*page = min(*page, *limit)
+	}
+	printed := 0
+	for e, err := range index.List(ctx, cat, dir, *after, *page) {
+		if errors.Is(err, catalog.ErrNotDir) && printed == 0 {
+			if e, err = cat.Stat(ctx, dir); err != nil {
 				return err
 			}
 			printEntry(stdout, e)
@@ -86,73 +89,9 @@ func runLs(ctx context.Context, args []string, stdout, stderr io.Writer) (err er
 		if err != nil {
 			return err
 		}
-		for _, e := range entries {
-			printEntry(stdout, e)
-		}
-		printed += len(entries)
-		if len(entries) < n {
+		printEntry(stdout, e)
+		if printed++; printed == *limit {
 			break
-		}
-		cursor = entries[len(entries)-1].Path
-	}
-	return nil
-}
-
-// listTree prints dir and everything below it, in the order fs.WalkDir visits
-// a disk: each dir right before its contents, names in byte order. Paths are
-// relative to dir, starting with ".". The stack holds one frame per open dir,
-// each with its current page, so memory is depth × page, not the tree's size.
-func listTree(ctx context.Context, cat catalog.Catalog, dir string, page int, w io.Writer) error {
-	top, err := cat.Stat(ctx, dir)
-	if err != nil {
-		return err
-	}
-	if top.Kind != catalog.Dir {
-		printEntry(w, top)
-		return nil
-	}
-	top.Path = "."
-	printEntry(w, top)
-
-	type frame struct {
-		rel     string // slash-separated, relative to dir
-		entries []catalog.Entry
-		next    int  // index of the next entry to print
-		more    bool // the last page was full, so another may follow
-	}
-	fetch := func(f *frame, after string) error {
-		var err error
-		f.entries, err = cat.List(ctx, filepath.Join(dir, filepath.FromSlash(f.rel)), after, page)
-		f.next, f.more = 0, len(f.entries) == page
-		return err
-	}
-	stack := []*frame{{rel: "."}}
-	if err := fetch(stack[0], ""); err != nil {
-		return err
-	}
-	for len(stack) > 0 {
-		f := stack[len(stack)-1]
-		if f.next == len(f.entries) {
-			if !f.more {
-				stack = stack[:len(stack)-1]
-				continue
-			}
-			if err := fetch(f, f.entries[len(f.entries)-1].Path); err != nil {
-				return err
-			}
-			continue
-		}
-		e := f.entries[f.next]
-		f.next++
-		rel := path.Join(f.rel, e.Path)
-		e.Path = rel
-		printEntry(w, e)
-		if e.Kind == catalog.Dir {
-			child := &frame{rel: rel}
-			if err := fetch(child, ""); err != nil {
-				return err
-			}
-			stack = append(stack, child)
 		}
 	}
 	return nil
