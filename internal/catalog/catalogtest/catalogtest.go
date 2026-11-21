@@ -34,6 +34,7 @@ func Run(t *testing.T, open Opener) {
 		{"ScanFinishAfterCancel", testScanFinishAfterCancel},
 		{"ScanRejects", testScanRejects},
 		{"ScanLinks", testScanLinks},
+		{"ScanKindChange", testScanKindChange},
 		{"ScanRootOverlap", testScanRootOverlap},
 		{"ScanRootOverlapConcurrent", testScanRootOverlapConcurrent},
 		{"ListPages", testListPages},
@@ -370,16 +371,15 @@ func testListPages(t *testing.T, open Opener) {
 		{"./", 0, t0},
 		{"B", 1, t0},
 		{"a", 1, t0},
+		{"l -> x/deep", 0, t0},
 		{"x/", 0, t0},
 		{"x/deep", 1, t0},
-		{"x", 1, t0}, // a file and a dir may share a name in the catalog
-		{"x -> deep", 0, t0},
-		{"l -> x/deep", 0, t0},
+		{"x.txt", 1, t0},
 		{"\xff", 1, t0},   // invalid UTF-8 sorts last, by bytes
 		{"\u00e9", 1, t0}, // é is 0xC3 0xA9: after ASCII, before 0xFF
 		{"line\nbreak", 1, t0},
 	})
-	want := []string{"file B", "file a", "link l -> x/deep", "file line\nbreak", "dir x", "file x", "link x -> deep", "file \u00e9", "file \xff"}
+	want := []string{"file B", "file a", "link l -> x/deep", "file line\nbreak", "dir x", "file x.txt", "file \u00e9", "file \xff"}
 
 	for _, page := range []int{1, 2, 3, len(want), len(want) + 1, 1000} {
 		if got := listAll(t, c, "/data", page); !slices.Equal(got, want) {
@@ -388,6 +388,24 @@ func testListPages(t *testing.T, open Opener) {
 	}
 	if got := listAll(t, c, "/data/x", 10); !slices.Equal(got, []string{"file deep"}) {
 		t.Errorf("/data/x = %q", got)
+	}
+}
+
+// A name holds one entry, as on disk: when a rescan finds another kind under
+// it, the entry becomes that kind.
+func testScanKindChange(t *testing.T, open Opener) {
+	c := open(t)
+	record(t, c, "/data", 1000, tree{{"./", 0, t0}, {"a", 1, t0}, {"b/", 0, t0}, {"c", 1, t0}})
+	stats := record(t, c, "/data", 1000, tree{{"./", 0, t0}, {"a/", 0, t0}, {"b", 7, t0}, {"c -> a", 0, t0}})
+	if stats.DirsWritten != 1 || stats.FilesWritten != 1 || stats.LinksWritten != 1 {
+		t.Errorf("stats = %+v, want 1 dir, 1 file and 1 link written", stats)
+	}
+	want := []string{"dir a", "file b", "link c -> a"}
+	if got := listAll(t, c, "/data", 10); !slices.Equal(got, want) {
+		t.Errorf("after kind changes: got %q, want %q", got, want)
+	}
+	if e := stat(t, c, "/data/b"); e.Size != 7 {
+		t.Errorf("b size = %d, want 7", e.Size)
 	}
 }
 

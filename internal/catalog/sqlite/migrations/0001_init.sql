@@ -7,36 +7,25 @@ CREATE TABLE roots (
 	added_ns INTEGER NOT NULL
 ) STRICT;
 
--- A tree rather than flat paths, so a directory's direct children are one
--- indexed range: (parent_id, name) for dirs, (dir_id, name) for files.
-CREATE TABLE dirs (
+-- A tree rather than flat paths, so a directory's children are one indexed
+-- range on (parent_id, name). Names are unique per directory, whatever their
+-- kind, as on disk. root_id is on every row so per-root work needs no
+-- recursive query.
+CREATE TABLE entries (
 	id        INTEGER PRIMARY KEY,
 	root_id   INTEGER NOT NULL REFERENCES roots(id),
-	parent_id INTEGER REFERENCES dirs(id), -- NULL for the root dir
-	name      TEXT    NOT NULL,            -- '' for the root dir
+	parent_id INTEGER REFERENCES entries(id), -- NULL for a root's top dir
+	name      TEXT    NOT NULL,               -- '' for a root's top dir
+	kind      TEXT    NOT NULL CHECK (kind IN ('dir', 'file', 'link')),
+	size      INTEGER,                        -- files only
 	mtime_ns  INTEGER NOT NULL,
-	UNIQUE (parent_id, name)
+	target    TEXT,                           -- links only, exactly what readlink returned
+	UNIQUE (parent_id, name),
+	CHECK ((kind = 'file') = (size IS NOT NULL)),
+	CHECK ((kind = 'link') = (target IS NOT NULL)),
+	CHECK (parent_id IS NOT NULL OR (kind = 'dir' AND name = ''))
 ) STRICT;
 
 -- UNIQUE treats NULLs as distinct, so (parent_id, name) alone would allow
--- several root dirs per root.
-CREATE UNIQUE INDEX dirs_one_root ON dirs (root_id) WHERE parent_id IS NULL;
-
-CREATE TABLE files (
-	id       INTEGER PRIMARY KEY,
-	dir_id   INTEGER NOT NULL REFERENCES dirs(id),
-	name     TEXT    NOT NULL,
-	size     INTEGER NOT NULL,
-	mtime_ns INTEGER NOT NULL,
-	UNIQUE (dir_id, name)
-) STRICT;
-
--- target is exactly what readlink returned; it is never followed at scan time.
-CREATE TABLE links (
-	id       INTEGER PRIMARY KEY,
-	dir_id   INTEGER NOT NULL REFERENCES dirs(id),
-	name     TEXT    NOT NULL,
-	target   TEXT    NOT NULL,
-	mtime_ns INTEGER NOT NULL,
-	UNIQUE (dir_id, name)
-) STRICT;
+-- several top dirs per root.
+CREATE UNIQUE INDEX entries_one_top ON entries (root_id) WHERE parent_id IS NULL;

@@ -13,16 +13,17 @@ import (
 )
 
 const (
-	sqlDirGet = `SELECT id, mtime_ns FROM dirs WHERE root_id = ? AND parent_id IS ? AND name = ?`
-	sqlDirIns = `INSERT INTO dirs (root_id, parent_id, name, mtime_ns) VALUES (?, ?, ?, ?) RETURNING id`
-	sqlDirUpd = `UPDATE dirs SET mtime_ns = ? WHERE id = ?`
-	// The WHERE makes an unchanged file a no-op: no page rewrite, no WAL growth.
-	sqlFileUpsert = `INSERT INTO files (dir_id, name, size, mtime_ns) VALUES (?, ?, ?, ?)
-		ON CONFLICT (dir_id, name) DO UPDATE SET size = excluded.size, mtime_ns = excluded.mtime_ns
-		WHERE files.size != excluded.size OR files.mtime_ns != excluded.mtime_ns`
-	sqlLinkUpsert = `INSERT INTO links (dir_id, name, target, mtime_ns) VALUES (?, ?, ?, ?)
-		ON CONFLICT (dir_id, name) DO UPDATE SET target = excluded.target, mtime_ns = excluded.mtime_ns
-		WHERE links.target != excluded.target OR links.mtime_ns != excluded.mtime_ns`
+	// No conflict target: it catches both (parent_id, name) and a root's one
+	// top dir. The WHERE makes an unchanged entry a no-op (no page rewrite, no
+	// WAL growth) that returns no row; IS NOT compares NULLs as values.
+	sqlUpsert = `INSERT INTO entries (root_id, parent_id, name, kind, size, mtime_ns, target)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT DO UPDATE SET kind = excluded.kind, size = excluded.size,
+			mtime_ns = excluded.mtime_ns, target = excluded.target
+		WHERE entries.kind != excluded.kind OR entries.size IS NOT excluded.size
+			OR entries.mtime_ns != excluded.mtime_ns OR entries.target IS NOT excluded.target
+		RETURNING id`
+	sqlEntryID = `SELECT id FROM entries WHERE root_id = ? AND parent_id IS ? AND name = ?`
 )
 
 func (c *Catalog) BeginScan(ctx context.Context, root string, opts catalog.ScanOptions) (catalog.ScanWriter, error) {
@@ -43,7 +44,7 @@ func (c *Catalog) BeginScan(ctx context.Context, root string, opts catalog.ScanO
 	for _, s := range []struct {
 		stmt **sql.Stmt
 		sql  string
-	}{{&w.dirGet, sqlDirGet}, {&w.dirIns, sqlDirIns}, {&w.dirUpd, sqlDirUpd}, {&w.fileUpsert, sqlFileUpsert}, {&w.linkUpsert, sqlLinkUpsert}} {
+	}{{&w.upsertStmt, sqlUpsert}, {&w.idStmt, sqlEntryID}} {
 		if *s.stmt, err = c.writer.PrepareContext(ctx, s.sql); err != nil {
 			w.closeStmts()
 			return nil, err
@@ -101,7 +102,7 @@ type scanWriter struct {
 	rootID    int64
 	batchSize int
 
-	dirGet, dirIns, dirUpd, fileUpsert, linkUpsert *sql.Stmt
+	upsertStmt, idStmt *sql.Stmt
 
 	tx      *sql.Tx // open batch; nil between batches
 	pending int     // entries written in the open batch
@@ -120,72 +121,81 @@ type dirRef struct {
 	id   int64
 }
 
+// row is one entries row, minus root_id (the writer's) and id.
+type row struct {
+	parent sql.NullInt64 // invalid for the top dir
+	name   string
+	kind   string
+	size   sql.NullInt64
+	mtime  int64
+	target sql.NullString
+}
+
 func (w *scanWriter) AddDir(ctx context.Context, d catalog.DirRecord) error {
-	var parent sql.NullInt64
-	name := ""
+	r := row{kind: "dir", mtime: d.ModTime.UnixNano()}
 	if d.Path != "." {
 		id, err := w.parentID(d.Path)
 		if err != nil {
 			return err
 		}
-		parent = sql.NullInt64{Int64: id, Valid: true}
-		name = path.Base(d.Path)
+		r.parent, r.name = sql.NullInt64{Int64: id, Valid: true}, path.Base(d.Path)
 	}
-	if err := w.ensureTx(ctx); err != nil {
-		return err
-	}
-
-	mtime := d.ModTime.UnixNano()
-	var id, stored int64
-	err := w.tx.StmtContext(ctx, w.dirGet).QueryRowContext(ctx, w.rootID, parent, name).Scan(&id, &stored)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		err = w.tx.StmtContext(ctx, w.dirIns).QueryRowContext(ctx, w.rootID, parent, name, mtime).Scan(&id)
-		w.stats.DirsWritten++
-	case err == nil && stored != mtime:
-		_, err = w.tx.StmtContext(ctx, w.dirUpd).ExecContext(ctx, mtime, id)
-		w.stats.DirsWritten++
-	case err == nil:
-		w.stats.DirsUnchanged++
+	id, written, err := w.upsert(ctx, r)
+	if err == nil && !written {
+		// The upsert returns no id when unchanged, but children need it.
+		err = w.tx.StmtContext(ctx, w.idStmt).QueryRowContext(ctx, w.rootID, r.parent, r.name).Scan(&id)
 	}
 	if err != nil {
 		return fmt.Errorf("dir %q: %w", d.Path, err)
 	}
+	count(written, &w.stats.DirsWritten, &w.stats.DirsUnchanged)
 	w.ancestors = append(w.ancestors, dirRef{d.Path, id})
 	return w.step()
 }
 
 func (w *scanWriter) AddFile(ctx context.Context, f catalog.FileRecord) error {
-	return w.upsert(ctx, w.fileUpsert, f.Path, &w.stats.FilesWritten, &w.stats.FilesUnchanged, f.Size, f.ModTime.UnixNano())
+	r := row{kind: "file", size: sql.NullInt64{Int64: f.Size, Valid: true}, mtime: f.ModTime.UnixNano()}
+	return w.addChild(ctx, f.Path, r, &w.stats.FilesWritten, &w.stats.FilesUnchanged)
 }
 
 func (w *scanWriter) AddLink(ctx context.Context, l catalog.LinkRecord) error {
-	return w.upsert(ctx, w.linkUpsert, l.Path, &w.stats.LinksWritten, &w.stats.LinksUnchanged, l.Target, l.ModTime.UnixNano())
+	r := row{kind: "link", mtime: l.ModTime.UnixNano(), target: sql.NullString{String: l.Target, Valid: true}}
+	return w.addChild(ctx, l.Path, r, &w.stats.LinksWritten, &w.stats.LinksUnchanged)
 }
 
-// upsert runs a conditional upsert of the entry at p with values after its
-// (dir_id, name), and counts it as written or unchanged.
-func (w *scanWriter) upsert(ctx context.Context, stmt *sql.Stmt, p string, written, unchanged *int, values ...any) error {
+func (w *scanWriter) addChild(ctx context.Context, p string, r row, written, unchanged *int) error {
 	dirID, err := w.parentID(p)
 	if err != nil {
 		return err
 	}
-	if err := w.ensureTx(ctx); err != nil {
-		return err
-	}
-	res, err := w.tx.StmtContext(ctx, stmt).ExecContext(ctx, append([]any{dirID, path.Base(p)}, values...)...)
+	r.parent, r.name = sql.NullInt64{Int64: dirID, Valid: true}, path.Base(p)
+	_, ok, err := w.upsert(ctx, r)
 	if err != nil {
 		return fmt.Errorf("%q: %w", p, err)
 	}
-	// 1 when inserted or changed, 0 when the upsert's WHERE found it unchanged.
-	if n, err := res.RowsAffected(); err != nil {
-		return err
-	} else if n > 0 {
-		*written++
-	} else {
-		*unchanged++
-	}
+	count(ok, written, unchanged)
 	return w.step()
+}
+
+// upsert reports whether r was inserted or changed, and its id if so.
+func (w *scanWriter) upsert(ctx context.Context, r row) (id int64, written bool, err error) {
+	if err := w.ensureTx(ctx); err != nil {
+		return 0, false, err
+	}
+	err = w.tx.StmtContext(ctx, w.upsertStmt).QueryRowContext(ctx,
+		w.rootID, r.parent, r.name, r.kind, r.size, r.mtime, r.target).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	return id, err == nil, err
+}
+
+func count(written bool, w, u *int) {
+	if written {
+		*w++
+	} else {
+		*u++
+	}
 }
 
 // parentID pops ancestors the walk has left, then returns the parent of p.
@@ -263,7 +273,7 @@ func (w *scanWriter) Abort() {
 }
 
 func (w *scanWriter) closeStmts() {
-	for _, s := range []*sql.Stmt{w.dirGet, w.dirIns, w.dirUpd, w.fileUpsert, w.linkUpsert} {
+	for _, s := range []*sql.Stmt{w.upsertStmt, w.idStmt} {
 		if s != nil {
 			s.Close()
 		}

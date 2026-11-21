@@ -147,7 +147,8 @@ func TestStrictAndReadOnlyEnforcement(t *testing.T) {
 	c, _ := openTest(t)
 	ctx := t.Context()
 	mustExec(t, ctx, c.writer, "INSERT INTO roots (id, path, added_ns) VALUES (1, '/data', 0)")
-	mustExec(t, ctx, c.writer, "INSERT INTO dirs (id, root_id, parent_id, name, mtime_ns) VALUES (1, 1, NULL, '', 0)")
+	mustExec(t, ctx, c.writer, "INSERT INTO entries (id, root_id, parent_id, name, kind, mtime_ns) VALUES (1, 1, NULL, '', 'dir', 0)")
+	const ins = "INSERT INTO entries (root_id, parent_id, name, kind, size, mtime_ns, target) VALUES "
 
 	// wantErr is a substring of the expected error, so a statement failing
 	// for an unrelated reason (a renamed column) doesn't pass.
@@ -157,10 +158,17 @@ func TestStrictAndReadOnlyEnforcement(t *testing.T) {
 		stmt    string
 		wantErr string
 	}{
-		{"valid row is accepted", c.writer, "INSERT INTO files (dir_id, name, size, mtime_ns) VALUES (1, 'ok', 1, 0)", ""},
-		{"strict rejects text in INTEGER column", c.writer, "INSERT INTO files (dir_id, name, size, mtime_ns) VALUES (1, 'a', 'big', 0)", "cannot store TEXT value in INTEGER column"},
-		{"foreign key rejects unknown dir", c.writer, "INSERT INTO files (dir_id, name, size, mtime_ns) VALUES (42, 'a', 1, 0)", "FOREIGN KEY constraint failed"},
-		{"one root dir per root", c.writer, "INSERT INTO dirs (root_id, parent_id, name, mtime_ns) VALUES (1, NULL, '', 0)", "UNIQUE constraint failed"},
+		{"valid file is accepted", c.writer, ins + "(1, 1, 'ok', 'file', 1, 0, NULL)", ""},
+		{"valid link is accepted", c.writer, ins + "(1, 1, 'ln', 'link', NULL, 0, 'ok')", ""},
+		{"strict rejects text in INTEGER column", c.writer, ins + "(1, 1, 'a', 'file', 'big', 0, NULL)", "cannot store TEXT value in INTEGER column"},
+		{"foreign key rejects unknown parent", c.writer, ins + "(1, 42, 'a', 'file', 1, 0, NULL)", "FOREIGN KEY constraint failed"},
+		{"one top dir per root", c.writer, ins + "(1, NULL, '', 'dir', NULL, 0, NULL)", "UNIQUE constraint failed"},
+		{"one name per dir, whatever the kind", c.writer, ins + "(1, 1, 'ok', 'dir', NULL, 0, NULL)", "UNIQUE constraint failed"},
+		{"unknown kind", c.writer, ins + "(1, 1, 'b', 'fifo', NULL, 0, NULL)", "CHECK constraint failed"},
+		{"file without size", c.writer, ins + "(1, 1, 'b', 'file', NULL, 0, NULL)", "CHECK constraint failed"},
+		{"dir with size", c.writer, ins + "(1, 1, 'b', 'dir', 1, 0, NULL)", "CHECK constraint failed"},
+		{"link without target", c.writer, ins + "(1, 1, 'b', 'link', NULL, 0, NULL)", "CHECK constraint failed"},
+		{"file with target", c.writer, ins + "(1, 1, 'b', 'file', 1, 0, 'x')", "CHECK constraint failed"},
 		{"reader pool cannot write", c.reader, "INSERT INTO roots (path, added_ns) VALUES ('/other', 0)", "readonly"},
 	}
 	for _, tt := range tests {
