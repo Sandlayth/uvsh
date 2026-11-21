@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/sandlayth/uvsh/internal/uvsh"
 )
 
 // Lookup is what path resolution needs from a backend. Backends bind it to
@@ -18,7 +20,7 @@ type Lookup interface {
 
 // Node is an Entry plus the backend's handle for it.
 type Node struct {
-	Entry
+	uvsh.Entry
 	ID int64
 }
 
@@ -55,7 +57,7 @@ func Resolve(ctx context.Context, l Lookup, path string) (Node, error) {
 		return n, nil
 	}
 	for name := range strings.SplitSeq(rel, string(filepath.Separator)) {
-		if n.Kind != Dir {
+		if n.Kind != uvsh.Dir {
 			return Node{}, notFound // links are never followed
 		}
 		var ok bool

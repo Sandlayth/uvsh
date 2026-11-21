@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/sandlayth/uvsh/internal/catalog"
+	"github.com/sandlayth/uvsh/internal/uvsh"
 )
 
 // Opener returns a new, empty catalog that is closed when t ends.
@@ -77,11 +78,11 @@ func record(t *testing.T, c catalog.Catalog, root string, batch int, entries tre
 	}
 	defer w.Abort()
 	for _, e := range entries {
-		entry := catalog.Entry{Path: e.path, Kind: catalog.File, Size: e.size, ModTime: e.mod}
+		entry := uvsh.Entry{Path: e.path, Kind: uvsh.File, Size: e.size, ModTime: e.mod}
 		if name, target, ok := strings.Cut(e.path, " -> "); ok {
-			entry = catalog.Entry{Path: name, Kind: catalog.Symlink, Target: target, ModTime: e.mod}
+			entry = uvsh.Entry{Path: name, Kind: uvsh.Symlink, Target: target, ModTime: e.mod}
 		} else if n := len(e.path); e.path[n-1] == '/' {
-			entry = catalog.Entry{Path: e.path[:n-1], Kind: catalog.Dir, ModTime: e.mod}
+			entry = uvsh.Entry{Path: e.path[:n-1], Kind: uvsh.Dir, ModTime: e.mod}
 		}
 		if err := w.Add(ctx, entry); err != nil {
 			t.Fatalf("add %s: %v", e.path, err)
@@ -106,7 +107,7 @@ func listAll(t *testing.T, c catalog.Catalog, dir string, page int) []string {
 		}
 		for _, e := range entries {
 			s := string(e.Kind) + " " + e.Path
-			if e.Kind == catalog.Symlink {
+			if e.Kind == uvsh.Symlink {
 				s += " -> " + e.Target
 			}
 			got = append(got, s)
@@ -122,7 +123,7 @@ func sameStats(a, b catalog.ScanStats) bool {
 	return maps.Equal(a.Written, b.Written) && maps.Equal(a.Unchanged, b.Unchanged) && a.Batches == b.Batches
 }
 
-func stat(t *testing.T, c catalog.Catalog, path string) catalog.Entry {
+func stat(t *testing.T, c catalog.Catalog, path string) uvsh.Entry {
 	t.Helper()
 	e, err := c.Stat(t.Context(), path)
 	if err != nil {
@@ -148,11 +149,11 @@ func testScanWritesTree(t *testing.T, open Opener) {
 	c := open(t)
 	stats := record(t, c, "/data", 1000, sample)
 
-	want := catalog.ScanStats{Written: map[catalog.Kind]int{catalog.Dir: 3, catalog.File: 4}, Batches: 1}
+	want := catalog.ScanStats{Written: map[uvsh.Kind]int{uvsh.Dir: 3, uvsh.File: 4}, Batches: 1}
 	if !sameStats(stats, want) {
 		t.Errorf("stats = %+v, want %+v", stats, want)
 	}
-	if e := stat(t, c, "/data/photos/2023/img.jpg"); e.Kind != catalog.File || e.Size != 100 || !e.ModTime.Equal(t0) {
+	if e := stat(t, c, "/data/photos/2023/img.jpg"); e.Kind != uvsh.File || e.Size != 100 || !e.ModTime.Equal(t0) {
 		t.Errorf("img.jpg = %+v", e)
 	}
 	if got, want := listAll(t, c, "/data/photos", 1000), []string{"dir 2023", "file z.txt"}; !slices.Equal(got, want) {
@@ -180,7 +181,7 @@ func testRescan(t *testing.T, open Opener) {
 	record(t, c, "/data", 2, sample)
 
 	t.Run("unchanged writes nothing", func(t *testing.T) {
-		want := catalog.ScanStats{Unchanged: map[catalog.Kind]int{catalog.Dir: 3, catalog.File: 4}, Batches: 4}
+		want := catalog.ScanStats{Unchanged: map[uvsh.Kind]int{uvsh.Dir: 3, uvsh.File: 4}, Batches: 4}
 		if got := record(t, c, "/data", 2, sample); !sameStats(got, want) {
 			t.Errorf("stats = %+v, want %+v", got, want)
 		}
@@ -192,7 +193,7 @@ func testRescan(t *testing.T, open Opener) {
 		changed[2].mod = t0.Add(time.Second) // photos/ got a new entry
 		changed[5].mod = t0.Add(time.Hour)   // photos/z.txt touched
 		stats := record(t, c, "/data", 1000, changed)
-		if stats.Written[catalog.File] != 2 || stats.Written[catalog.Dir] != 1 {
+		if stats.Written[uvsh.File] != 2 || stats.Written[uvsh.Dir] != 1 {
 			t.Errorf("stats = %+v, want 2 files and 1 dir written", stats)
 		}
 		if got := stat(t, c, "/data/a.txt").Size; got != 4 {
@@ -228,10 +229,10 @@ func testScanAbortDiscardsOpenBatch(t *testing.T, open Opener) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Add(ctx, catalog.Entry{Path: ".", Kind: catalog.Dir, ModTime: t0}); err != nil {
+	if err := w.Add(ctx, uvsh.Entry{Path: ".", Kind: uvsh.Dir, ModTime: t0}); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Add(ctx, catalog.Entry{Path: "a", Kind: catalog.File, Size: 1, ModTime: t0}); err != nil {
+	if err := w.Add(ctx, uvsh.Entry{Path: "a", Kind: uvsh.File, Size: 1, ModTime: t0}); err != nil {
 		t.Fatal(err)
 	}
 	w.Abort()
@@ -254,10 +255,10 @@ func testScanFinishAfterCancel(t *testing.T, open Opener) {
 		t.Fatal(err)
 	}
 	defer w.Abort()
-	if err := w.Add(ctx, catalog.Entry{Path: ".", Kind: catalog.Dir, ModTime: t0}); err != nil {
+	if err := w.Add(ctx, uvsh.Entry{Path: ".", Kind: uvsh.Dir, ModTime: t0}); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Add(ctx, catalog.Entry{Path: "a", Kind: catalog.File, Size: 1, ModTime: t0}); err != nil {
+	if err := w.Add(ctx, uvsh.Entry{Path: "a", Kind: uvsh.File, Size: 1, ModTime: t0}); err != nil {
 		t.Fatal(err)
 	}
 	cancel()
@@ -291,13 +292,13 @@ func testScanRejects(t *testing.T, open Opener) {
 		t.Fatal(err)
 	}
 	defer w.Abort()
-	if err := w.Add(ctx, catalog.Entry{Path: "orphan/f", Kind: catalog.File, ModTime: t0}); err == nil {
+	if err := w.Add(ctx, uvsh.Entry{Path: "orphan/f", Kind: uvsh.File, ModTime: t0}); err == nil {
 		t.Error("Add without its parent dir succeeded")
 	}
-	if err := w.Add(ctx, catalog.Entry{Path: ".", Kind: catalog.Dir, ModTime: t0}); err != nil {
+	if err := w.Add(ctx, uvsh.Entry{Path: ".", Kind: uvsh.Dir, ModTime: t0}); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Add(ctx, catalog.Entry{Path: "fifo", Kind: catalog.Other, ModTime: t0}); err == nil {
+	if err := w.Add(ctx, uvsh.Entry{Path: "fifo", Kind: uvsh.Other, ModTime: t0}); err == nil {
 		t.Error("Add of an Other entry succeeded")
 	}
 }
@@ -312,16 +313,16 @@ func testScanLinks(t *testing.T, open Opener) {
 		{"sub/", 0, t0},
 		{"sub/up -> ../a.txt", 0, t0},
 	}
-	if got := record(t, c, "/data", 1000, links); got.Written[catalog.Symlink] != 3 || got.Unchanged[catalog.Symlink] != 0 {
+	if got := record(t, c, "/data", 1000, links); got.Written[uvsh.Symlink] != 3 || got.Unchanged[uvsh.Symlink] != 0 {
 		t.Errorf("first scan: stats = %+v, want 3 links written", got)
 	}
-	if got := record(t, c, "/data", 1000, links); got.Written[catalog.Symlink] != 0 || got.Unchanged[catalog.Symlink] != 3 {
+	if got := record(t, c, "/data", 1000, links); got.Written[uvsh.Symlink] != 0 || got.Unchanged[uvsh.Symlink] != 3 {
 		t.Errorf("rescan: stats = %+v, want 3 links unchanged", got)
 	}
 	changed := append(tree(nil), links...)
 	changed[2].path = "dangling -> a.txt" // retargeted
 	changed[3].mod = t0.Add(time.Second)  // recreated, same target
-	if got := record(t, c, "/data", 1000, changed); got.Written[catalog.Symlink] != 2 || got.Unchanged[catalog.Symlink] != 1 {
+	if got := record(t, c, "/data", 1000, changed); got.Written[uvsh.Symlink] != 2 || got.Unchanged[uvsh.Symlink] != 1 {
 		t.Errorf("changed: stats = %+v, want 2 links written, 1 unchanged", got)
 	}
 }
@@ -407,7 +408,7 @@ func testScanKindChange(t *testing.T, open Opener) {
 	c := open(t)
 	record(t, c, "/data", 1000, tree{{"./", 0, t0}, {"a", 1, t0}, {"b/", 0, t0}, {"c", 1, t0}})
 	stats := record(t, c, "/data", 1000, tree{{"./", 0, t0}, {"a/", 0, t0}, {"b", 7, t0}, {"c -> a", 0, t0}})
-	if want := map[catalog.Kind]int{catalog.Dir: 1, catalog.File: 1, catalog.Symlink: 1}; !maps.Equal(stats.Written, want) {
+	if want := map[uvsh.Kind]int{uvsh.Dir: 1, uvsh.File: 1, uvsh.Symlink: 1}; !maps.Equal(stats.Written, want) {
 		t.Errorf("stats = %+v, want 1 dir, 1 file and 1 link written", stats)
 	}
 	want := []string{"dir a", "file b", "link c -> a"}
@@ -466,21 +467,21 @@ func testStat(t *testing.T, open Opener) {
 
 	for _, tt := range []struct {
 		path string
-		want catalog.Entry
+		want uvsh.Entry
 		err  error
 	}{
-		{"/data", catalog.Entry{Path: "data", Kind: catalog.Dir, ModTime: t0}, nil},
-		{"/data/", catalog.Entry{Path: "data", Kind: catalog.Dir, ModTime: t0}, nil},
-		{"/data/x/../photos", catalog.Entry{Path: "photos", Kind: catalog.Dir, ModTime: t0}, nil},
-		{"/data/photos/2023", catalog.Entry{Path: "2023", Kind: catalog.Dir, ModTime: t0}, nil},
-		{"/data/a.txt", catalog.Entry{Path: "a.txt", Kind: catalog.File, Size: 3, ModTime: t0}, nil},
-		{"/srv/media/top", catalog.Entry{Path: "top", Kind: catalog.File, Size: 9, ModTime: t0}, nil},
-		{"/srv/media/film", catalog.Entry{Path: "film", Kind: catalog.Symlink, Target: "/data/photos", ModTime: t0}, nil},
-		{"/srv/media/film/2023", catalog.Entry{}, catalog.ErrNotFound}, // links are never followed
-		{"/srv", catalog.Entry{}, catalog.ErrNotFound},                 // above a root
-		{"/data/nope", catalog.Entry{}, catalog.ErrNotFound},
-		{"/data/a.txt/below", catalog.Entry{}, catalog.ErrNotFound},
-		{"/elsewhere/x", catalog.Entry{}, catalog.ErrNotFound},
+		{"/data", uvsh.Entry{Path: "data", Kind: uvsh.Dir, ModTime: t0}, nil},
+		{"/data/", uvsh.Entry{Path: "data", Kind: uvsh.Dir, ModTime: t0}, nil},
+		{"/data/x/../photos", uvsh.Entry{Path: "photos", Kind: uvsh.Dir, ModTime: t0}, nil},
+		{"/data/photos/2023", uvsh.Entry{Path: "2023", Kind: uvsh.Dir, ModTime: t0}, nil},
+		{"/data/a.txt", uvsh.Entry{Path: "a.txt", Kind: uvsh.File, Size: 3, ModTime: t0}, nil},
+		{"/srv/media/top", uvsh.Entry{Path: "top", Kind: uvsh.File, Size: 9, ModTime: t0}, nil},
+		{"/srv/media/film", uvsh.Entry{Path: "film", Kind: uvsh.Symlink, Target: "/data/photos", ModTime: t0}, nil},
+		{"/srv/media/film/2023", uvsh.Entry{}, catalog.ErrNotFound}, // links are never followed
+		{"/srv", uvsh.Entry{}, catalog.ErrNotFound},                 // above a root
+		{"/data/nope", uvsh.Entry{}, catalog.ErrNotFound},
+		{"/data/a.txt/below", uvsh.Entry{}, catalog.ErrNotFound},
+		{"/elsewhere/x", uvsh.Entry{}, catalog.ErrNotFound},
 	} {
 		got, err := c.Stat(t.Context(), tt.path)
 		if !errors.Is(err, tt.err) {

@@ -1,11 +1,14 @@
-// Package catalog defines the UVSH metadata model, independent of the
-// storage engine that persists it (see the backend and sqlite subpackages).
+// Package catalog is the contract between UVSH and its storage engines: the
+// interface each engine implements and the rules all of them enforce (see the
+// backend, sqlite and catalogtest subpackages).
 package catalog
 
 import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/sandlayth/uvsh/internal/uvsh"
 )
 
 var (
@@ -23,35 +26,16 @@ type Catalog interface {
 	BeginScan(ctx context.Context, root string, opts ScanOptions) (ScanWriter, error)
 	Roots(ctx context.Context) ([]Root, error)
 	// Stat returns the entry at path. Its Path is its base name.
-	Stat(ctx context.Context, path string) (Entry, error)
+	Stat(ctx context.Context, path string) (uvsh.Entry, error)
 	// List returns up to limit entries of the dir at path whose names sort
 	// after after, in byte order. Their Path is their name.
-	List(ctx context.Context, path string, after string, limit int) ([]Entry, error)
+	List(ctx context.Context, path string, after string, limit int) ([]uvsh.Entry, error)
 	Close() error
 }
 
 type Root struct {
 	Path  string
 	Added time.Time
-}
-
-// Kind values are stored as is, so they must never change.
-type Kind string
-
-const (
-	Dir     Kind = "dir"
-	File    Kind = "file"
-	Symlink Kind = "link"
-	Other   Kind = "other" // fifos, sockets, devices: walked, never stored
-)
-
-// Entry is one filesystem entry, as walked or as recorded.
-type Entry struct {
-	Path    string // slash-separated, relative to the walked root or listed dir
-	Kind    Kind
-	Size    int64 // files only
-	ModTime time.Time
-	Target  string // links only, as stored in the link
 }
 
 // Info describes the state of an opened catalog.
@@ -69,7 +53,7 @@ type ScanOptions struct {
 type ScanWriter interface {
 	// Add records e, whose Path is relative to the scanned root. Other kinds
 	// are rejected.
-	Add(ctx context.Context, e Entry) error
+	Add(ctx context.Context, e uvsh.Entry) error
 	// Finish commits the last batch and reports what was written. It must
 	// still commit after the walk's ctx was cancelled (Ctrl-C): callers pass
 	// a ctx that isn't, e.g. context.WithoutCancel(walkCtx).
@@ -82,6 +66,6 @@ type ScanWriter interface {
 // ScanStats counts, per kind, entries inserted or changed (Written) and
 // entries already up to date (Unchanged), plus the committed transactions.
 type ScanStats struct {
-	Written, Unchanged map[Kind]int
+	Written, Unchanged map[uvsh.Kind]int
 	Batches            int
 }

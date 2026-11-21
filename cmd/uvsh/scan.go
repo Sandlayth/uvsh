@@ -15,6 +15,7 @@ import (
 	"github.com/sandlayth/uvsh/internal/catalog/backend"
 	"github.com/sandlayth/uvsh/internal/index"
 	"github.com/sandlayth/uvsh/internal/scan"
+	"github.com/sandlayth/uvsh/internal/uvsh"
 )
 
 func runScan(ctx context.Context, args []string, stdout, stderr io.Writer, logger *slog.Logger) (err error) {
@@ -61,7 +62,7 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer, logge
 	start := time.Now()
 	var rep index.Report
 	if *dsn == "" {
-		rep, err = index.Walk(ctx, fs.Arg(0), opts, func(e catalog.Entry) error {
+		rep, err = index.Walk(ctx, fs.Arg(0), opts, func(e uvsh.Entry) error {
 			printEntry(stdout, e)
 			return nil
 		})
@@ -79,14 +80,14 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer, logge
 	}
 
 	attrs := []any{
-		"dirs", rep.Seen[catalog.Dir],
-		"files", rep.Seen[catalog.File],
-		"symlinks", rep.Seen[catalog.Symlink],
-		"other", rep.Seen[catalog.Other],
+		"dirs", rep.Seen[uvsh.Dir],
+		"files", rep.Seen[uvsh.File],
+		"symlinks", rep.Seen[uvsh.Symlink],
+		"other", rep.Seen[uvsh.Other],
 		"errors", rep.Skipped,
 	}
 	if *dsn != "" {
-		for _, k := range []catalog.Kind{catalog.Dir, catalog.File, catalog.Symlink} {
+		for _, k := range []uvsh.Kind{uvsh.Dir, uvsh.File, uvsh.Symlink} {
 			attrs = append(attrs, string(k)+"s_written", rep.Stats.Written[k], string(k)+"s_unchanged", rep.Stats.Unchanged[k])
 		}
 		attrs = append(attrs, "batches", rep.Stats.Batches)

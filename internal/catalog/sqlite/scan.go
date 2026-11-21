@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sandlayth/uvsh/internal/catalog"
+	"github.com/sandlayth/uvsh/internal/uvsh"
 )
 
 const (
@@ -39,7 +40,7 @@ func (c *Catalog) BeginScan(ctx context.Context, root string, opts catalog.ScanO
 	}
 
 	w := &scanWriter{db: c.writer, rootID: rootID, batchSize: opts.BatchSize, stats: catalog.ScanStats{
-		Written: map[catalog.Kind]int{}, Unchanged: map[catalog.Kind]int{},
+		Written: map[uvsh.Kind]int{}, Unchanged: map[uvsh.Kind]int{},
 	}}
 	// Prepared once on the pool, then bound to each batch's transaction with
 	// tx.StmtContext: SQLite parses each statement once per scan, not per row.
@@ -123,13 +124,13 @@ type dirRef struct {
 	id   int64
 }
 
-func (w *scanWriter) Add(ctx context.Context, e catalog.Entry) error {
+func (w *scanWriter) Add(ctx context.Context, e uvsh.Entry) error {
 	r := row{kind: e.Kind, mtime: e.ModTime.UnixNano()}
 	switch e.Kind {
-	case catalog.Dir:
-	case catalog.File:
+	case uvsh.Dir:
+	case uvsh.File:
 		r.size = sql.NullInt64{Int64: e.Size, Valid: true}
-	case catalog.Symlink:
+	case uvsh.Symlink:
 		r.target = sql.NullString{String: e.Target, Valid: true}
 	default:
 		return fmt.Errorf("%q: cannot record kind %q", e.Path, e.Kind)
@@ -143,7 +144,7 @@ func (w *scanWriter) Add(ctx context.Context, e catalog.Entry) error {
 	}
 
 	id, written, err := w.upsert(ctx, r)
-	if err == nil && !written && e.Kind == catalog.Dir {
+	if err == nil && !written && e.Kind == uvsh.Dir {
 		// The upsert returns no id when unchanged, but children need it.
 		err = w.tx.StmtContext(ctx, w.idStmt).QueryRowContext(ctx, w.rootID, r.parent, r.name).Scan(&id)
 	}
@@ -155,7 +156,7 @@ func (w *scanWriter) Add(ctx context.Context, e catalog.Entry) error {
 	} else {
 		w.stats.Unchanged[e.Kind]++
 	}
-	if e.Kind == catalog.Dir {
+	if e.Kind == uvsh.Dir {
 		w.ancestors = append(w.ancestors, dirRef{e.Path, id})
 	}
 	return w.step()
@@ -165,7 +166,7 @@ func (w *scanWriter) Add(ctx context.Context, e catalog.Entry) error {
 type row struct {
 	parent sql.NullInt64 // invalid for the top dir
 	name   string
-	kind   catalog.Kind
+	kind   uvsh.Kind
 	size   sql.NullInt64
 	mtime  int64
 	target sql.NullString

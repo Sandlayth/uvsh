@@ -12,6 +12,7 @@ import (
 
 	"github.com/sandlayth/uvsh/internal/catalog"
 	"github.com/sandlayth/uvsh/internal/catalog/backend"
+	"github.com/sandlayth/uvsh/internal/uvsh"
 )
 
 // disk writes a small tree, with every kind of entry, and returns its real path.
@@ -47,9 +48,9 @@ func must(t *testing.T, err error) {
 	}
 }
 
-func collect(t *testing.T, seq func(func(catalog.Entry, error) bool)) []catalog.Entry {
+func collect(t *testing.T, seq func(func(uvsh.Entry, error) bool)) []uvsh.Entry {
 	t.Helper()
-	var got []catalog.Entry
+	var got []uvsh.Entry
 	for e, err := range seq {
 		must(t, err)
 		got = append(got, e)
@@ -61,11 +62,11 @@ func TestRecord(t *testing.T) {
 	root, c := disk(t), open(t)
 	rep, err := Record(t.Context(), c, root, Options{BatchSize: 4})
 	must(t, err)
-	seen := map[catalog.Kind]int{catalog.Dir: 7, catalog.File: 8, catalog.Symlink: 2, catalog.Other: 1}
+	seen := map[uvsh.Kind]int{uvsh.Dir: 7, uvsh.File: 8, uvsh.Symlink: 2, uvsh.Other: 1}
 	if !maps.Equal(rep.Seen, seen) || rep.Skipped != 0 {
 		t.Errorf("seen = %v, skipped = %d; want %v, 0", rep.Seen, rep.Skipped, seen)
 	}
-	delete(seen, catalog.Other) // walked, never stored
+	delete(seen, uvsh.Other) // walked, never stored
 	if !maps.Equal(rep.Stats.Written, seen) {
 		t.Errorf("written = %v, want %v", rep.Stats.Written, seen)
 	}
@@ -117,7 +118,7 @@ type cancellingWriter struct {
 	c *cancelling
 }
 
-func (w *cancellingWriter) Add(ctx context.Context, e catalog.Entry) error {
+func (w *cancellingWriter) Add(ctx context.Context, e uvsh.Entry) error {
 	if w.c.n--; w.c.n == 0 {
 		w.c.cancel()
 	}
@@ -145,9 +146,9 @@ func TestTreeMatchesWalk(t *testing.T) {
 	root, c := disk(t), open(t)
 	_, err := Record(t.Context(), c, root, Options{BatchSize: 1000})
 	must(t, err)
-	var walked []catalog.Entry
-	_, err = Walk(t.Context(), root, Options{}, func(e catalog.Entry) error {
-		if e.Kind != catalog.Other {
+	var walked []uvsh.Entry
+	_, err = Walk(t.Context(), root, Options{}, func(e uvsh.Entry) error {
+		if e.Kind != uvsh.Other {
 			walked = append(walked, e)
 		}
 		return nil
@@ -167,7 +168,7 @@ func TestTreeOfAFile(t *testing.T) {
 	_, err := Record(t.Context(), c, root, Options{BatchSize: 1000})
 	must(t, err)
 	got := collect(t, Tree(t.Context(), c, filepath.Join(root, "a/m.txt"), 10))
-	if len(got) != 1 || got[0].Path != "m.txt" || got[0].Kind != catalog.File {
+	if len(got) != 1 || got[0].Path != "m.txt" || got[0].Kind != uvsh.File {
 		t.Errorf("Tree(file) = %v, want just m.txt", got)
 	}
 }
@@ -223,6 +224,6 @@ func TestList(t *testing.T) {
 	}
 }
 
-func sameEntry(a, b catalog.Entry) bool {
+func sameEntry(a, b uvsh.Entry) bool {
 	return a.Path == b.Path && a.Kind == b.Kind && a.Size == b.Size && a.Target == b.Target && a.ModTime.Equal(b.ModTime)
 }

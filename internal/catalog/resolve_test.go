@@ -6,6 +6,8 @@ import (
 	"path"
 	"strings"
 	"testing"
+
+	"github.com/sandlayth/uvsh/internal/uvsh"
 )
 
 var errBoom = errors.New("boom")
@@ -21,7 +23,7 @@ type fakeLookup struct {
 func newFake(roots map[string][]string) *fakeLookup {
 	f := &fakeLookup{roots: map[string]int64{}, children: map[int64]map[string]Node{}}
 	var next int64
-	add := func(parent int64, name string, kind Kind) int64 {
+	add := func(parent int64, name string, kind uvsh.Kind) int64 {
 		if n, ok := f.children[parent][name]; ok {
 			return n.ID
 		}
@@ -29,7 +31,7 @@ func newFake(roots map[string][]string) *fakeLookup {
 		if f.children[parent] == nil {
 			f.children[parent] = map[string]Node{}
 		}
-		f.children[parent][name] = Node{Entry: Entry{Path: name, Kind: kind}, ID: next}
+		f.children[parent][name] = Node{Entry: uvsh.Entry{Path: name, Kind: kind}, ID: next}
 		return next
 	}
 	for root, entries := range roots {
@@ -39,9 +41,9 @@ func newFake(roots map[string][]string) *fakeLookup {
 			dir := f.roots[root]
 			parts := strings.Split(strings.TrimSuffix(e, "/"), "/")
 			for i, name := range parts {
-				kind := Dir
+				kind := uvsh.Dir
 				if i == len(parts)-1 && !strings.HasSuffix(e, "/") {
-					kind = File
+					kind = uvsh.File
 				}
 				dir = add(dir, name, kind)
 			}
@@ -52,7 +54,7 @@ func newFake(roots map[string][]string) *fakeLookup {
 
 func (f *fakeLookup) Root(_ context.Context, p string) (Node, bool, error) {
 	id, ok := f.roots[p]
-	return Node{Entry: Entry{Kind: Dir}, ID: id}, ok, nil
+	return Node{Entry: uvsh.Entry{Kind: uvsh.Dir}, ID: id}, ok, nil
 }
 
 func (f *fakeLookup) Child(_ context.Context, dir Node, name string) (Node, bool, error) {
@@ -72,17 +74,17 @@ func TestResolve(t *testing.T) {
 	for _, tt := range []struct {
 		path     string
 		wantName string
-		wantKind Kind
+		wantKind uvsh.Kind
 		wantErr  error
 	}{
-		{"/data", "data", Dir, nil},
-		{"/data/", "data", Dir, nil},
-		{"/data/x/../a.txt", "a.txt", File, nil},
-		{"/data/a.txt", "a.txt", File, nil},
-		{"/top", "top", File, nil},
-		{"/", "/", Dir, nil},
+		{"/data", "data", uvsh.Dir, nil},
+		{"/data/", "data", uvsh.Dir, nil},
+		{"/data/x/../a.txt", "a.txt", uvsh.File, nil},
+		{"/data/a.txt", "a.txt", uvsh.File, nil},
+		{"/top", "top", uvsh.File, nil},
+		{"/", "/", uvsh.Dir, nil},
 		// The most specific root wins, with no fallback to /data.
-		{"/data/photos/only-here.jpg", "only-here.jpg", File, nil},
+		{"/data/photos/only-here.jpg", "only-here.jpg", uvsh.File, nil},
 		{"/data/photos/2023", "", "", ErrNotFound},
 		{"/data/nope", "", "", ErrNotFound},
 		{"/data/a.txt/below", "", "", ErrNotFound},

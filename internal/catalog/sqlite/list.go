@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/sandlayth/uvsh/internal/catalog"
+	"github.com/sandlayth/uvsh/internal/uvsh"
 )
 
 // One seek on the (parent_id, name) index, then at most :n rows in order.
@@ -36,17 +37,17 @@ func (c *Catalog) Roots(ctx context.Context) ([]catalog.Root, error) {
 	return roots, rows.Err()
 }
 
-func (c *Catalog) Stat(ctx context.Context, path string) (catalog.Entry, error) {
+func (c *Catalog) Stat(ctx context.Context, path string) (uvsh.Entry, error) {
 	tx, err := c.reader.BeginTx(ctx, nil)
 	if err != nil {
-		return catalog.Entry{}, err
+		return uvsh.Entry{}, err
 	}
 	defer tx.Rollback()
 	n, err := catalog.Resolve(ctx, txLookup{tx}, path)
 	return n.Entry, err
 }
 
-func (c *Catalog) List(ctx context.Context, path string, after string, limit int) ([]catalog.Entry, error) {
+func (c *Catalog) List(ctx context.Context, path string, after string, limit int) ([]uvsh.Entry, error) {
 	if limit < 1 {
 		return nil, fmt.Errorf("limit %d: must be at least 1", limit)
 	}
@@ -60,7 +61,7 @@ func (c *Catalog) List(ctx context.Context, path string, after string, limit int
 	if err != nil {
 		return nil, err
 	}
-	if dir.Kind != catalog.Dir {
+	if dir.Kind != uvsh.Dir {
 		return nil, fmt.Errorf("%s: %w", path, catalog.ErrNotDir)
 	}
 
@@ -69,7 +70,7 @@ func (c *Catalog) List(ctx context.Context, path string, after string, limit int
 		return nil, err
 	}
 	defer rows.Close()
-	entries := make([]catalog.Entry, 0, limit)
+	entries := make([]uvsh.Entry, 0, limit)
 	for rows.Next() {
 		n, err := scanNode(rows)
 		if err != nil {
@@ -101,7 +102,7 @@ func scanNode(r interface{ Scan(...any) error }) (catalog.Node, error) {
 		return catalog.Node{}, err
 	}
 	switch n.Kind {
-	case catalog.Dir, catalog.File, catalog.Symlink:
+	case uvsh.Dir, uvsh.File, uvsh.Symlink:
 	default:
 		return catalog.Node{}, fmt.Errorf("entry %d: unknown kind %q", n.ID, n.Kind)
 	}
