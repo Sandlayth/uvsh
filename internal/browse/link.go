@@ -1,4 +1,4 @@
-package index
+package browse
 
 import (
 	"context"
@@ -36,6 +36,7 @@ func (s LinkStatus) String() string {
 }
 
 // maxHops is Linux's MAXSYMLINKS: past 40 links, open fails with ELOOP.
+
 const maxHops = 40
 
 // ResolveLink reports what opening the link at path, holding target, would
@@ -43,6 +44,7 @@ const maxHops = 40
 // Links in the target are followed as the kernel would, ".." included: after
 // a link, ".." is the parent of where the link led, not of the link. All the
 // lookups see one snapshot of the catalog.
+
 func ResolveLink(ctx context.Context, cat catalog.Catalog, path, target string) (LinkStatus, error) {
 	var s LinkStatus
 	err := cat.Read(ctx, func(l catalog.Lookup) error {
@@ -108,7 +110,7 @@ func resolveLink(ctx context.Context, l catalog.Lookup, path, target string) (Li
 		} else if !ok {
 			return LinkDangling, nil
 		}
-		if n.Kind != uvsh.Symlink {
+		if n.Kind != uvsh.Link {
 			cur = filepath.Join(cur, name)
 			stack = append(stack, n)
 			continue

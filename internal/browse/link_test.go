@@ -1,4 +1,4 @@
-package index
+package browse
 
 import (
 	"errors"
@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/sandlayth/uvsh/internal/catalog"
+	"github.com/sandlayth/uvsh/internal/index"
 	"github.com/sandlayth/uvsh/internal/uvsh"
 )
 
@@ -29,7 +30,7 @@ func put(t *testing.T, c catalog.Catalog, root string, links map[string]string) 
 		}
 		for name, target := range links {
 			if path.Dir(name) == dir {
-				must(t, w.Add(ctx, uvsh.Entry{Path: name, Kind: uvsh.Symlink, Target: target}))
+				must(t, w.Add(ctx, uvsh.Entry{Path: name, Kind: uvsh.Link, Target: target}))
 			}
 		}
 	}
@@ -89,6 +90,7 @@ func TestResolveLink(t *testing.T) {
 }
 
 // At /, ".." stays at / and every absolute target is inside the root.
+
 func TestResolveLinkRootIsSlash(t *testing.T) {
 	c := open(t)
 	links := map[string]string{"abs": "/a.txt", "photos/up": "../../../photos"}
@@ -102,6 +104,7 @@ func TestResolveLinkRootIsSlash(t *testing.T) {
 
 // The kernel is the reference: each link's status must match what stat(2)
 // does with it, and outside means stat lands beyond the root.
+
 func TestResolveLinkMatchesKernel(t *testing.T) {
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
 	must(t, err)
@@ -125,7 +128,7 @@ func TestResolveLinkMatchesKernel(t *testing.T) {
 		must(t, os.Symlink(target, filepath.Join(root, name)))
 	}
 	c := open(t)
-	_, err = Record(t.Context(), c, root, Options{BatchSize: 1000})
+	_, err = index.Record(t.Context(), c, root, index.Options{BatchSize: 1000})
 	must(t, err)
 
 	for name, target := range links {

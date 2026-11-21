@@ -67,7 +67,7 @@ func entry(fsys fs.FS, p string, d fs.DirEntry) (uvsh.Entry, error) {
 	case mode.IsDir():
 		e.Kind = uvsh.Dir
 	case mode&fs.ModeSymlink != 0:
-		e.Kind = uvsh.Symlink
+		e.Kind = uvsh.Link
 		e.Target, err = fs.ReadLink(fsys, p)
 	default:
 		e.Kind = uvsh.Other

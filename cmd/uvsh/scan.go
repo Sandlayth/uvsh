@@ -82,12 +82,12 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer, logge
 	attrs := []any{
 		"dirs", rep.Seen[uvsh.Dir],
 		"files", rep.Seen[uvsh.File],
-		"symlinks", rep.Seen[uvsh.Symlink],
+		"links", rep.Seen[uvsh.Link],
 		"other", rep.Seen[uvsh.Other],
 		"errors", rep.Skipped,
 	}
 	if *dsn != "" {
-		for _, k := range []uvsh.Kind{uvsh.Dir, uvsh.File, uvsh.Symlink} {
+		for _, k := range []uvsh.Kind{uvsh.Dir, uvsh.File, uvsh.Link} {
 			attrs = append(attrs, string(k)+"s_written", rep.Stats.Written[k], string(k)+"s_unchanged", rep.Stats.Unchanged[k])
 		}
 		attrs = append(attrs, "missing", rep.Stats.Missing, "batches", rep.Stats.Batches)

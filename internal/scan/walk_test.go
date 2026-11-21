@@ -106,12 +106,12 @@ func TestWalkReportsEveryKind(t *testing.T) {
 		"dir/.cache/c.txt": {Kind: uvsh.File, Size: 1, ModTime: stamp},
 		"#trash/d.txt":     {Kind: uvsh.File, Size: 1, ModTime: stamp},
 		"x.tmp":            {Kind: uvsh.File, Size: 1, ModTime: stamp},
-		"links/to-file":    {Kind: uvsh.Symlink, Target: "../a.txt"},
-		"links/to-dir":     {Kind: uvsh.Symlink, Target: "../dir"},
-		"links/to-outside": {Kind: uvsh.Symlink, Target: "../../outside/secret.txt"},
-		"links/dangling":   {Kind: uvsh.Symlink, Target: "../nope.txt"},
-		"links/loop-a":     {Kind: uvsh.Symlink, Target: "loop-b"},
-		"links/loop-b":     {Kind: uvsh.Symlink, Target: "loop-a"},
+		"links/to-file":    {Kind: uvsh.Link, Target: "../a.txt"},
+		"links/to-dir":     {Kind: uvsh.Link, Target: "../dir"},
+		"links/to-outside": {Kind: uvsh.Link, Target: "../../outside/secret.txt"},
+		"links/dangling":   {Kind: uvsh.Link, Target: "../nope.txt"},
+		"links/loop-a":     {Kind: uvsh.Link, Target: "loop-b"},
+		"links/loop-b":     {Kind: uvsh.Link, Target: "loop-a"},
 		"fifo":             {Kind: uvsh.Other},
 	}
 	if len(entries) != len(want) {

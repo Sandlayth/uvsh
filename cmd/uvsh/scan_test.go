@@ -50,7 +50,7 @@ func TestScanDryRun(t *testing.T) {
 	if stdout.String() != want {
 		t.Errorf("stdout =\n%s\nwant\n%s", stdout.String(), want)
 	}
-	if s := stderr.String(); !strings.Contains(s, "files=2 symlinks=1 other=0 errors=0") {
+	if s := stderr.String(); !strings.Contains(s, "files=2 links=1 other=0 errors=0") {
 		t.Errorf("stderr summary = %q", s)
 	}
 }

@@ -8,10 +8,10 @@ import "time"
 type Kind string
 
 const (
-	Dir     Kind = "dir"
-	File    Kind = "file"
-	Symlink Kind = "link"
-	Other   Kind = "other" // fifos, sockets, devices: walked, never stored
+	Dir   Kind = "dir"
+	File  Kind = "file"
+	Link  Kind = "link"
+	Other Kind = "other" // fifos, sockets, devices: walked, never stored
 )
 
 // Entry is a filesystem entry, as a walk finds it and as a catalog records it.

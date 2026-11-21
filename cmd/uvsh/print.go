@@ -19,7 +19,7 @@ func printEntry(w io.Writer, e uvsh.Entry, tag string) {
 	switch e.Kind {
 	case uvsh.File:
 		size = fmt.Sprint(e.Size)
-	case uvsh.Symlink:
+	case uvsh.Link:
 		name += " -> " + quoteIfNeeded(e.Target)
 	}
 	if tag != "" {

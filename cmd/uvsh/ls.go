@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sandlayth/uvsh/internal/browse"
 	"github.com/sandlayth/uvsh/internal/catalog"
 	"github.com/sandlayth/uvsh/internal/catalog/backend"
-	"github.com/sandlayth/uvsh/internal/index"
 	"github.com/sandlayth/uvsh/internal/uvsh"
 )
 
@@ -69,8 +69,8 @@ func runLs(ctx context.Context, args []string, stdout, stderr io.Writer) (err er
 	// show prints e, found at p; a link gets its status as a fifth column.
 	show := func(p string, e uvsh.Entry) error {
 		tag := ""
-		if e.Kind == uvsh.Symlink {
-			s, err := index.ResolveLink(ctx, cat, p, e.Target)
+		if e.Kind == uvsh.Link {
+			s, err := browse.ResolveLink(ctx, cat, p, e.Target)
 			if err != nil {
 				return err
 			}
@@ -82,7 +82,7 @@ func runLs(ctx context.Context, args []string, stdout, stderr io.Writer) (err er
 
 	if *recursive {
 		first := true
-		for e, err := range index.Tree(ctx, cat, dir, *page) {
+		for e, err := range browse.Tree(ctx, cat, dir, *page) {
 			if err != nil {
 				return err
 			}
@@ -101,7 +101,7 @@ func runLs(ctx context.Context, args []string, stdout, stderr io.Writer) (err er
 		*page = min(*page, *limit)
 	}
 	printed := 0
-	for e, err := range index.List(ctx, cat, dir, *after, *page) {
+	for e, err := range browse.List(ctx, cat, dir, *after, *page) {
 		if errors.Is(err, catalog.ErrNotDir) && printed == 0 {
 			if e, err = cat.Stat(ctx, dir); err != nil {
 				return err

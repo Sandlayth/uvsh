@@ -162,7 +162,7 @@ func (w *scanWriter) Add(ctx context.Context, e uvsh.Entry) error {
 	case uvsh.Dir:
 	case uvsh.File:
 		r.size = sql.NullInt64{Int64: e.Size, Valid: true}
-	case uvsh.Symlink:
+	case uvsh.Link:
 		r.target = sql.NullString{String: e.Target, Valid: true}
 	default:
 		return fmt.Errorf("%q: cannot record kind %q", e.Path, e.Kind)

@@ -112,7 +112,7 @@ func scanNode(r interface{ Scan(...any) error }) (catalog.Node, error) {
 		return catalog.Node{}, err
 	}
 	switch n.Kind {
-	case uvsh.Dir, uvsh.File, uvsh.Symlink:
+	case uvsh.Dir, uvsh.File, uvsh.Link:
 	default:
 		return catalog.Node{}, fmt.Errorf("entry %d: unknown kind %q", n.ID, n.Kind)
 	}

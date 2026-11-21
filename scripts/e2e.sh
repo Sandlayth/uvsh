@@ -8,7 +8,7 @@ set -eu
 [ $# -eq 2 ] || { echo "usage: $0 UVSH_BINARY FIXTURE_DIR" >&2; exit 2; }
 UVSH=$1
 DIR=$2
-. "$DIR/expected" # defines user_is_root, dirs, files, symlinks, other, dirs_excluded, files_excluded
+. "$DIR/expected" # defines user_is_root, dirs, files, links, other, dirs_excluded, files_excluded
 errors=$((1 - user_is_root)) # the locked dir is only unreadable for non-root
 
 failures=0
@@ -66,7 +66,7 @@ summary=$("$UVSH" scan -dry-run "$DIR/tree" 2>&1 >/dev/null | grep 'scan complet
 echo "$summary"
 check "full scan" "$dirs" "$summary" dirs
 check "full scan" "$files" "$summary" files
-check "full scan" "$symlinks" "$summary" symlinks
+check "full scan" "$links" "$summary" links
 check "full scan" "$other" "$summary" other
 check "full scan" "$errors" "$summary" errors
 
@@ -81,7 +81,7 @@ summary=$("$UVSH" scan -db "sqlite:$db" -batch 5 "$DIR/tree" 2>&1 >/dev/null | g
 echo "$summary"
 check "record" "$dirs" "$summary" dirs_written
 check "record" "$files" "$summary" files_written
-check "record" "$symlinks" "$summary" links_written
+check "record" "$links" "$summary" links_written
 check "record" "$errors" "$summary" errors
 
 summary=$("$UVSH" scan -db "sqlite:$db" -batch 5 "$DIR/tree" 2>&1 >/dev/null | grep 'scan complete' || true)
@@ -90,7 +90,7 @@ check "rescan" 0 "$summary" dirs_written
 check "rescan" 0 "$summary" files_written
 check "rescan" "$files" "$summary" files_unchanged
 check "rescan" 0 "$summary" links_written
-check "rescan" "$symlinks" "$summary" links_unchanged
+check "rescan" "$links" "$summary" links_unchanged
 
 # The tree is now a registered root: nothing inside or around it may be one.
 overlap_refused() { "$UVSH" scan -db "sqlite:$db" "$1" 2>&1 >/dev/null | grep -q 'overlaps the registered root'; }
