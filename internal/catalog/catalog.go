@@ -30,6 +30,10 @@ type Catalog interface {
 	// List returns up to limit entries of the dir at path whose names sort
 	// after after, in byte order. Their Path is their name.
 	List(ctx context.Context, path string, after string, limit int) ([]uvsh.Entry, error)
+	// Read runs fn with lookups that all see one snapshot of the catalog, so
+	// a multi-step read can't straddle a scan's commit. The Lookup is only
+	// valid during fn.
+	Read(ctx context.Context, fn func(Lookup) error) error
 	Close() error
 }
 

@@ -81,7 +81,16 @@ func (c *Catalog) List(ctx context.Context, path string, after string, limit int
 	return entries, rows.Err()
 }
 
-// txLookup serves catalog.Resolve from one read transaction.
+func (c *Catalog) Read(ctx context.Context, fn func(catalog.Lookup) error) error {
+	tx, err := c.reader.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	return fn(txLookup{tx})
+}
+
+// txLookup serves lookups from one read transaction.
 type txLookup struct{ tx *sql.Tx }
 
 func (l txLookup) Root(ctx context.Context, path string) (catalog.Node, bool, error) {

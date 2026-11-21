@@ -44,6 +44,7 @@ func Run(t *testing.T, open Opener) {
 		{"ListRejects", testListRejects},
 		{"Stat", testStat},
 		{"Roots", testRoots},
+		{"ReadSnapshot", testReadSnapshot},
 	} {
 		t.Run(tt.name, func(t *testing.T) { tt.test(t, open) })
 	}
@@ -116,6 +117,13 @@ func listAll(t *testing.T, c catalog.Catalog, dir string, page int) []string {
 			return got
 		}
 		after = entries[len(entries)-1].Path
+	}
+}
+
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -495,6 +503,42 @@ func testStat(t *testing.T, open Opener) {
 		if got != tt.want {
 			t.Errorf("Stat(%q) = %+v, want %+v", tt.path, got, tt.want)
 		}
+	}
+}
+
+// Lookups inside one Read don't see a scan that commits while it runs.
+func testReadSnapshot(t *testing.T, open Opener) {
+	c := open(t)
+	record(t, c, "/data", 1000, sample)
+	child := func(l catalog.Lookup, name string) bool {
+		t.Helper()
+		top, ok, err := l.Root(t.Context(), "/data")
+		if err != nil || !ok {
+			t.Fatalf("Root(/data) = %v, %v", ok, err)
+		}
+		_, ok, err = l.Child(t.Context(), top, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+
+	err := c.Read(t.Context(), func(l catalog.Lookup) error {
+		if !child(l, "a.txt") {
+			t.Error("a.txt not found in the snapshot")
+		}
+		record(t, c, "/data", 1000, append(sample, tree{{"new.txt", 1, t0}}...))
+		if child(l, "new.txt") {
+			t.Error("Read saw a scan committed after its first lookup")
+		}
+		return nil
+	})
+	must(t, err)
+	stat(t, c, "/data/new.txt") // visible to the next read
+
+	boom := errors.New("boom")
+	if err := c.Read(t.Context(), func(catalog.Lookup) error { return boom }); !errors.Is(err, boom) {
+		t.Errorf("Read error = %v, want fn's error", err)
 	}
 }
 
