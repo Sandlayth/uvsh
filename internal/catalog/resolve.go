@@ -56,7 +56,7 @@ func Resolve(ctx context.Context, l Lookup, path string) (Node, error) {
 	}
 	for name := range strings.SplitSeq(rel, string(filepath.Separator)) {
 		if n.Kind != Dir {
-			return Node{}, notFound // a file can't have children
+			return Node{}, notFound // links are never followed
 		}
 		var ok bool
 		var err error

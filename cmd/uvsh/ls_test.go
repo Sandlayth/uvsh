@@ -24,6 +24,7 @@ func scannedTree(t *testing.T) (root, dsn string) {
 	for name, content := range map[string]string{"a.txt": "aaa", "new\nline.txt": "n", "sub/b.txt": "b", "z.txt": "zz"} {
 		must(t, os.WriteFile(filepath.Join(root, name), []byte(content), 0o644))
 	}
+	must(t, os.Symlink("a.txt", filepath.Join(root, "y")))
 	for _, p := range []string{"a.txt", "new\nline.txt", "sub/b.txt", "z.txt", "sub", "."} {
 		must(t, os.Chtimes(filepath.Join(root, p), stamp, stamp))
 	}
@@ -58,9 +59,13 @@ func TestLsUsage(t *testing.T) {
 
 func TestLs(t *testing.T) {
 	root, dsn := scannedTree(t)
+	// os.Chtimes follows links, so the link keeps its creation time.
+	y, err := os.Lstat(filepath.Join(root, "y"))
+	must(t, err)
+	link := "link\t-\t" + y.ModTime().UTC().Format(time.RFC3339) + "\ty -> a.txt\n"
 	full := "file\t3\t2023-01-15T12:30:00Z\ta.txt\n" +
 		"file\t1\t2023-01-15T12:30:00Z\t\"new\\nline.txt\"\n" +
-		"dir\t-\t2023-01-15T12:30:00Z\tsub\n" +
+		"dir\t-\t2023-01-15T12:30:00Z\tsub\n" + link +
 		"file\t2\t2023-01-15T12:30:00Z\tz.txt\n"
 
 	for _, tt := range []struct {
@@ -72,7 +77,9 @@ func TestLs(t *testing.T) {
 		{"one entry per page", []string{"-page", "1", root}, full},
 		{"limit", []string{"-limit", "2", "-page", "1", root}, "file\t3\t2023-01-15T12:30:00Z\ta.txt\n" +
 			"file\t1\t2023-01-15T12:30:00Z\t\"new\\nline.txt\"\n"},
-		{"after", []string{"-after", "sub", root}, "file\t2\t2023-01-15T12:30:00Z\tz.txt\n"},
+		{"after", []string{"-after", "sub", root}, link + "file\t2\t2023-01-15T12:30:00Z\tz.txt\n"},
+		{"after a link", []string{"-after", "y", root}, "file\t2\t2023-01-15T12:30:00Z\tz.txt\n"},
+		{"link", []string{root + "/y"}, link},
 		{"subdir", []string{root + "/sub"}, "file\t1\t2023-01-15T12:30:00Z\tb.txt\n"},
 		{"file", []string{root + "/a.txt"}, "file\t3\t2023-01-15T12:30:00Z\ta.txt\n"},
 	} {
@@ -128,6 +135,9 @@ func TestLsRecursiveMatchesDryRun(t *testing.T) {
 	}
 	for _, f := range []string{"a/b/c/deep.txt", "a/b/x.txt", "a/m.txt", "a/z/last.txt", "b.txt", "new\nline/f", "\xff.bin", "B.txt"} {
 		must(t, os.WriteFile(filepath.Join(root, f), []byte(f), 0o644))
+	}
+	for link, target := range map[string]string{"a/to-c": "b/c", "b.txt.lnk": "b.txt", "dangling": "nope", "odd": "new\nline"} {
+		must(t, os.Symlink(target, filepath.Join(root, link)))
 	}
 	dsn := "sqlite:" + filepath.Join(t.TempDir(), "catalog.db")
 

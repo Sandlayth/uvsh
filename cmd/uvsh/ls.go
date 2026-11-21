@@ -68,8 +68,8 @@ func runLs(ctx context.Context, args []string, stdout, stderr io.Writer) (err er
 	if *recursive {
 		return listTree(ctx, cat, dir, *page, stdout)
 	}
-	// File sorts after Dir, so this cursor skips both entries named -after.
-	cursor := catalog.Cursor{Name: *after, Kind: catalog.File}
+	// Symlink sorts last, so this cursor skips every entry named -after.
+	cursor := catalog.Cursor{Name: *after, Kind: catalog.Symlink}
 	for printed := 0; *limit == 0 || printed < *limit; {
 		n := *page
 		if *limit > 0 {
@@ -159,11 +159,14 @@ func listTree(ctx context.Context, cat catalog.Catalog, dir string, page int, w 
 	return nil
 }
 
-// printCatalogEntry uses the columns of scan -dry-run: kind, size, mtime, name.
+// printCatalogEntry uses the columns of scan -dry-run: kind, size, mtime, name[ -> target].
 func printCatalogEntry(w io.Writer, e catalog.Entry) {
-	size := "-"
-	if e.Kind == catalog.File {
+	size, name := "-", quoteIfNeeded(e.Name)
+	switch e.Kind {
+	case catalog.File:
 		size = fmt.Sprint(e.Size)
+	case catalog.Symlink:
+		name += " -> " + quoteIfNeeded(e.Target)
 	}
-	fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", e.Kind, size, e.ModTime.UTC().Format(time.RFC3339), quoteIfNeeded(e.Name))
+	fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", e.Kind, size, e.ModTime.UTC().Format(time.RFC3339), name)
 }

@@ -38,6 +38,7 @@ type Kind int
 const (
 	Dir Kind = iota
 	File
+	Symlink
 )
 
 func (k Kind) String() string {
@@ -46,6 +47,8 @@ func (k Kind) String() string {
 		return "dir"
 	case File:
 		return "file"
+	case Symlink:
+		return "link"
 	}
 	return "unknown"
 }
@@ -53,8 +56,9 @@ func (k Kind) String() string {
 type Entry struct {
 	Name    string
 	Kind    Kind
-	Size    int64 // 0 for dirs
+	Size    int64 // files only
 	ModTime time.Time
+	Target  string // links only, as stored in the link
 }
 
 type Cursor struct {

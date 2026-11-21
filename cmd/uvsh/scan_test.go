@@ -40,9 +40,12 @@ func TestScanDryRun(t *testing.T) {
 		t.Fatalf("run() error = %v, stderr = %q", err, stderr.String())
 	}
 
+	// os.Chtimes follows links, so the link keeps its creation time.
+	link, err := os.Lstat(filepath.Join(dir, "link"))
+	must(t, err)
 	want := "dir\t-\t2023-01-15T12:30:00Z\t.\n" +
 		"file\t3\t2023-01-15T12:30:00Z\ta.txt\n" +
-		"link\t-\t-\tlink -> a.txt\n" +
+		"link\t-\t" + link.ModTime().UTC().Format(time.RFC3339) + "\tlink -> a.txt\n" +
 		"file\t1\t2023-01-15T12:30:00Z\t\"new\\nline.txt\"\n"
 	if stdout.String() != want {
 		t.Errorf("stdout =\n%s\nwant\n%s", stdout.String(), want)

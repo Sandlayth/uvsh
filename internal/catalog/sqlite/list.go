@@ -11,18 +11,23 @@ import (
 )
 
 // Each branch seeks its (parent, name) index and stops after :n rows, so at
-// most 2n rows are merged however large the directory is. name >= :name is
+// most 3n rows are merged however large the directory is. name >= :name is
 // the index range; the OR then drops the cursor row itself.
 const sqlList = `
-SELECT name, kind, size, mtime_ns FROM (
+SELECT name, kind, size, mtime_ns, target FROM (
 	SELECT * FROM (
-		SELECT name, 0 AS kind, 0 AS size, mtime_ns FROM dirs
+		SELECT name, 0 AS kind, 0 AS size, mtime_ns, '' AS target FROM dirs
 		WHERE parent_id = :dir AND name >= :name AND (name > :name OR 0 > :kind)
 		ORDER BY name LIMIT :n)
 	UNION ALL
 	SELECT * FROM (
-		SELECT name, 1, size, mtime_ns FROM files
+		SELECT name, 1, size, mtime_ns, '' FROM files
 		WHERE dir_id = :dir AND name >= :name AND (name > :name OR 1 > :kind)
+		ORDER BY name LIMIT :n)
+	UNION ALL
+	SELECT * FROM (
+		SELECT name, 2, 0, mtime_ns, target FROM links
+		WHERE dir_id = :dir AND name >= :name AND (name > :name OR 2 > :kind)
 		ORDER BY name LIMIT :n)
 )
 ORDER BY name, kind LIMIT :n`
@@ -84,7 +89,7 @@ func (c *Catalog) List(ctx context.Context, path string, after catalog.Cursor, l
 	for rows.Next() {
 		var e catalog.Entry
 		var mtime int64
-		if err := rows.Scan(&e.Name, &e.Kind, &e.Size, &mtime); err != nil {
+		if err := rows.Scan(&e.Name, &e.Kind, &e.Size, &mtime, &e.Target); err != nil {
 			return nil, err
 		}
 		e.ModTime = time.Unix(0, mtime)
@@ -113,6 +118,11 @@ func (l txLookup) Child(ctx context.Context, dir catalog.Node, name string) (cat
 	}
 	n.Kind = catalog.File
 	err = l.tx.QueryRowContext(ctx, `SELECT id, size, mtime_ns FROM files WHERE dir_id = ? AND name = ?`, dir.ID, name).Scan(&n.ID, &n.Size, &mtime)
+	if !errors.Is(err, sql.ErrNoRows) {
+		return found(n, mtime, err)
+	}
+	n.Kind = catalog.Symlink
+	err = l.tx.QueryRowContext(ctx, `SELECT id, target, mtime_ns FROM links WHERE dir_id = ? AND name = ?`, dir.ID, name).Scan(&n.ID, &n.Target, &mtime)
 	return found(n, mtime, err)
 }
 

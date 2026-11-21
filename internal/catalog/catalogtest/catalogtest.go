@@ -93,7 +93,7 @@ func record(t *testing.T, c catalog.Catalog, root string, batch int, entries tre
 	return stats
 }
 
-// listAll pages through dir and returns "kind name" for each entry.
+// listAll pages through dir and returns "kind name[ -> target]" for each entry.
 func listAll(t *testing.T, c catalog.Catalog, dir string, page int) []string {
 	t.Helper()
 	var got []string
@@ -104,7 +104,11 @@ func listAll(t *testing.T, c catalog.Catalog, dir string, page int) []string {
 			t.Fatalf("List(%s, page %d): %v", dir, page, err)
 		}
 		for _, e := range entries {
-			got = append(got, e.Kind.String()+" "+e.Name)
+			s := e.Kind.String() + " " + e.Name
+			if e.Kind == catalog.Symlink {
+				s += " -> " + e.Target
+			}
+			got = append(got, s)
 		}
 		if len(entries) < page {
 			return got
@@ -368,12 +372,14 @@ func testListPages(t *testing.T, open Opener) {
 		{"a", 1, t0},
 		{"x/", 0, t0},
 		{"x/deep", 1, t0},
-		{"x", 1, t0},      // a file and a dir may share a name in the catalog
+		{"x", 1, t0}, // a file and a dir may share a name in the catalog
+		{"x -> deep", 0, t0},
+		{"l -> x/deep", 0, t0},
 		{"\xff", 1, t0},   // invalid UTF-8 sorts last, by bytes
 		{"\u00e9", 1, t0}, // é is 0xC3 0xA9: after ASCII, before 0xFF
 		{"line\nbreak", 1, t0},
 	})
-	want := []string{"file B", "file a", "file line\nbreak", "dir x", "file x", "file \u00e9", "file \xff"}
+	want := []string{"file B", "file a", "link l -> x/deep", "file line\nbreak", "dir x", "file x", "link x -> deep", "file \u00e9", "file \xff"}
 
 	for _, page := range []int{1, 2, 3, len(want), len(want) + 1, 1000} {
 		if got := listAll(t, c, "/data", page); !slices.Equal(got, want) {
@@ -428,7 +434,7 @@ func testListRejects(t *testing.T, open Opener) {
 func testStat(t *testing.T, open Opener) {
 	c := open(t)
 	record(t, c, "/data", 1000, sample)
-	record(t, c, "/srv/media", 1000, tree{{"./", 0, t0}, {"top", 9, t0}})
+	record(t, c, "/srv/media", 1000, tree{{"./", 0, t0}, {"top", 9, t0}, {"film -> /data/photos", 0, t0}})
 
 	for _, tt := range []struct {
 		path string
@@ -441,7 +447,9 @@ func testStat(t *testing.T, open Opener) {
 		{"/data/photos/2023", catalog.Entry{Name: "2023", Kind: catalog.Dir, ModTime: t0}, nil},
 		{"/data/a.txt", catalog.Entry{Name: "a.txt", Kind: catalog.File, Size: 3, ModTime: t0}, nil},
 		{"/srv/media/top", catalog.Entry{Name: "top", Kind: catalog.File, Size: 9, ModTime: t0}, nil},
-		{"/srv", catalog.Entry{}, catalog.ErrNotFound}, // above a root
+		{"/srv/media/film", catalog.Entry{Name: "film", Kind: catalog.Symlink, Target: "/data/photos", ModTime: t0}, nil},
+		{"/srv/media/film/2023", catalog.Entry{}, catalog.ErrNotFound}, // links are never followed
+		{"/srv", catalog.Entry{}, catalog.ErrNotFound},                 // above a root
 		{"/data/nope", catalog.Entry{}, catalog.ErrNotFound},
 		{"/data/a.txt/below", catalog.Entry{}, catalog.ErrNotFound},
 		{"/elsewhere/x", catalog.Entry{}, catalog.ErrNotFound},

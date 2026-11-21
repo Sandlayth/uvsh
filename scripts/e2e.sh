@@ -97,10 +97,10 @@ overlap_refused() { "$UVSH" scan -db "sqlite:$db" "$1" 2>&1 >/dev/null | grep -q
 expect "root inside a root refused" overlap_refused "$DIR/tree/photos"
 expect "root containing a root refused" overlap_refused "$DIR"
 
-# Browsing: ls must list what find sees directly in each dir (files and dirs
-# only, until symlinks are recorded). One line per entry, even for hostile
+# Browsing: ls must list what find sees directly in each dir (everything but
+# other kinds, which aren't recorded). One line per entry, even for hostile
 # names, so lines count entries.
-children() { find "$1/." ! -name . -prune \( -type f -o -type d \) -exec printf '.' \; 2>/dev/null | wc -c | tr -d ' '; }
+children() { find "$1/." ! -name . -prune \( -type f -o -type d -o -type l \) -exec printf '.' \; 2>/dev/null | wc -c | tr -d ' '; }
 for d in "" /names /photos/2023 /deep/a/b/c/d/e/f/g/h /links /special /locked; do
 	want=$(children "$DIR/tree$d")
 	got=$("$UVSH" ls -db "sqlite:$db" "$DIR/tree$d" 2>/dev/null | wc -l | tr -d ' ')
@@ -116,7 +116,7 @@ expect "ls lists the one root" [ "$(printf '%s\n' "$roots" | cut -f4)" = "$real"
 # Round trip: the catalog must hold exactly what the walker saw, entry for
 # entry and in the same order (minus what isn't recorded yet).
 same() { cmp -s "$1" "$2" || { diff "$1" "$2" | head -20; return 1; }; }
-"$UVSH" scan -dry-run "$DIR/tree" 2>/dev/null | grep -v -e '^link	' -e '^other	' >"$DIR/walk.out" || true
+"$UVSH" scan -dry-run "$DIR/tree" 2>/dev/null | grep -v '^other	' >"$DIR/walk.out" || true
 "$UVSH" ls -db "sqlite:$db" -R "$DIR/tree" >"$DIR/tree.out" 2>&1 || true
 "$UVSH" ls -db "sqlite:$db" -R -page 1 "$DIR/tree" >"$DIR/tree.page1.out" 2>&1 || true
 expect "ls -R matches scan -dry-run ($(wc -l <"$DIR/walk.out" | tr -d ' ') lines)" same "$DIR/walk.out" "$DIR/tree.out"
